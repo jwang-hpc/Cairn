@@ -12,7 +12,7 @@ machines:
     auto_approve_below: { node_hours: 4 }
   bebop:
     host: "<login-node>"
-    scheduler: "<slurm|pbs>"
+    scheduler: slurm     # or pbs
     account: "<allocation>"
     partitions: ["<allowed>"]
     max: { nodes: 4, walltime: "04:00:00" }

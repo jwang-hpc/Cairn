@@ -1,0 +1,14 @@
+# Per-machine engine settings. Copy to config/engine.yaml (gitignored) and edit on each machine.
+machine: mbp            # recorded on every usage record (DR-0010: per-machine accounting)
+budget:
+  daily:                # resets at local midnight (DR-0010 layer 2)
+    usd:                # billed calls (API keys); provider-side monthly caps are layer 1
+      total: 10
+      per_provider: { anthropic: 5, openai: 5 }
+    tokens:             # subscription calls: no money spent, but usage-window limited
+      per_provider: { anthropic: 2000000, openai: 2000000 }
+    # per_role: { coder: { usd: 3 } }
+  run:                  # one worker run / CLI call; stops a runaway loop
+    max_usd: 2
+    max_tokens: 500000
+    max_turns: 30
