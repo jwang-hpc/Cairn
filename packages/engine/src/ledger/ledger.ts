@@ -5,6 +5,7 @@ import { appendFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promis
 import { dirname, join, posix, relative } from "node:path";
 import { AGENT_AUTHOR, git } from "@cairn/launcher";
 import {
+  type ClaimDraft,
   type DataClass,
   type ExplorationNode,
   type Hypothesis,
@@ -18,10 +19,16 @@ import {
   NODE_REQUIRED,
   type NodeType,
   type Provenance,
+  provenance as prov,
+  type SupportReport,
   validate,
 } from "@cairn/shared";
 import { parseDocument, stringify } from "yaml";
-import { nextId, parseEntries, renderEntry } from "./markdown.js";
+import { parseDraft } from "../claims/draft.js";
+import { ledgerReader } from "../claims/reader.js";
+import { type ClaimReview, draftSha } from "../claims/review.js";
+import { checkSupport } from "../claims/support.js";
+import { type MdEntry, nextId, parseEntries, renderEntry } from "./markdown.js";
 import { appendNode, flatten, renderTree, validateTree } from "./tree.js";
 
 export class LedgerError extends Error {
@@ -37,9 +44,12 @@ const HYPOTHESES = "logic/hypotheses.md";
 const DECISIONS = "engine/decisions.md";
 const LOG = "engine/ledger.jsonl";
 /** Reserved for the claim gate (invariant 5). */
-const CLAIM_GATED = new Set(["logic/claims.md"]);
+const CLAIMS = "logic/claims.md";
+const CLAIM_GATED = new Set([CLAIMS]);
+/** The claim gate's own commits; only approveClaim uses it. */
+const GATE_OP = "claim-gate";
 /** Where engine artifacts may be written via writeArtifacts(): panel rounds, job records, executor evidence, parser tables. */
-const ARTIFACT_AREAS = ["engine/panels/", "engine/jobs/", "evidence/raw/", "evidence/tables/"];
+const ARTIFACT_AREAS = ["engine/panels/", "engine/jobs/", "evidence/raw/", "evidence/tables/", "engine/claims/reviews/"];
 
 const pad = (n: number) => String(n).padStart(2, "0");
 /** ARA timestamp: local "YYYY-MM-DDTHH:MM". */
@@ -179,6 +189,11 @@ export class Ledger {
     }));
   }
 
+  /** Claims in logic/claims.md (written only by approveClaim). */
+  async claims(): Promise<MdEntry[]> {
+    return parseEntries(await readFile(join(this.dir, CLAIMS), "utf8"), /^C\d+$/);
+  }
+
   async writes(): Promise<LedgerWrite[]> {
     const text = await readFile(join(this.dir, LOG), "utf8");
     return text.split("\n").filter(Boolean).map((l) => JSON.parse(l) as LedgerWrite);
@@ -301,6 +316,40 @@ export class Ledger {
     await this.#commit(op, paths[0]!, undefined, prov, summary, paths);
   }
 
+  /**
+   * The claim gate (DR-0007, invariant 5): the only writer of logic/claims.md. Re-runs the code-only support check
+   * against the ledger as committed (a passing report from earlier proves nothing now), requires a committed rigor
+   * review of this exact draft, and records the user's approval. An AI draft enters as user-revised; a user's draft
+   * as user. The claim, the draft, the support report, the review, and the approval are one commit.
+   */
+  async approveClaim(md: string, opts: { note?: string } = {}): Promise<{ id: string; provenance: Provenance; report: SupportReport; review: ClaimReview }> {
+    const draft = parseDraft(md);
+    const report = await checkSupport(draft, ledgerReader(this), this.now());
+    if (!report.ok) throw new LedgerError(`the support check fails (${report.errors[0]}); see re claim check`);
+    const sha = draftSha(md);
+    let review: ClaimReview;
+    try {
+      review = JSON.parse(await git(this.dir, ["show", `HEAD:engine/claims/reviews/${sha.slice(0, 16)}.json`])) as ClaimReview;
+    } catch {
+      throw new LedgerError("no rigor review of this exact draft (re claim review); a changed draft needs a new review");
+    }
+    if (review.draft_sha256 !== sha) throw new LedgerError("the review on file is for a different draft");
+    if ((await git(this.dir, ["status", "--porcelain", "--", CLAIMS])).trim()) {
+      throw new LedgerError(`${CLAIMS} has changes made outside the gate; restore it first (git checkout -- ${CLAIMS})`);
+    }
+    const id = nextId("C", (await this.claims()).map((c) => c.id));
+    const p = /^user(-revised)?$/.test(draft.fields.Provenance?.trim() ?? "") ? (draft.fields.Provenance!.trim() as Provenance) : prov.userRevised;
+    const at = this.now();
+    await appendFile(join(this.dir, CLAIMS), `\n${renderClaim(id, draft, p, `${day(at)} (approved through the claim gate: engine/claims/${id}/)`)}`);
+    const dir = `engine/claims/${id}`;
+    const gate = { claim: id, draft_sha256: sha, support: report, review, approved: { by: p, at: at.toISOString(), ...(opts.note ? { note: opts.note } : {}) } };
+    await mkdir(join(this.dir, dir), { recursive: true });
+    await writeFile(join(this.dir, dir, "draft.md"), md);
+    await writeFile(join(this.dir, dir, "gate.json"), `${JSON.stringify(gate, null, 2)}\n`);
+    await this.#commit(GATE_OP, CLAIMS, id, p, `claim ${id}: ${draft.title}`, [CLAIMS, `${dir}/draft.md`, `${dir}/gate.json`]);
+    return { id, provenance: p, report, review };
+  }
+
   /** Verify every write is tagged: ledger.jsonl entries, git commits, tree nodes, hypotheses. */
   async check(): Promise<{ ok: boolean; problems: string[]; writes: number; commits: number }> {
     const problems: string[] = [];
@@ -357,10 +406,10 @@ export class Ledger {
 
   async #commit(op: string, file: string, id: string | undefined, prov: Provenance, summary: string, paths: string[] = [file]): Promise<void> {
     for (const p of paths) {
-      if (CLAIM_GATED.has(p)) throw new LedgerError(`${p} is written only through the claim gate (invariant 5)`);
+      if (CLAIM_GATED.has(p) && op !== GATE_OP) throw new LedgerError(`${p} is written only through the claim gate (invariant 5)`);
     }
     const changed = (await git(this.dir, ["status", "--porcelain"])).split("\n").filter(Boolean).map((l) => l.slice(3));
-    if (op !== "create" && changed.some((f) => CLAIM_GATED.has(f))) {
+    if (op !== "create" && op !== GATE_OP && changed.some((f) => CLAIM_GATED.has(f))) {
       throw new LedgerError("logic/claims.md changed outside the claim gate; refusing to commit");
     }
     const entry: LedgerWrite = { ts: new Date(this.now()).toISOString(), op, file, ...(id ? { id } : {}), provenance: prov, summary };
@@ -374,4 +423,24 @@ export class Ledger {
   rel(path: string): string {
     return relative(this.dir, path);
   }
+}
+
+/** An approved claim in the ARA schema (research-manager "Claim"), Sources as sub-bullets. */
+function renderClaim(id: string, d: ClaimDraft, p: Provenance, revised: string): string {
+  const f = d.fields;
+  const lines = [`## ${id}: ${d.title}`];
+  const field = (k: string, v: string | undefined) => {
+    if (v !== undefined && v.trim() !== "") lines.push(`- **${k}**: ${v.replace(/\s*\n\s*/g, " ").trim()}`);
+  };
+  field("Statement", f.Statement);
+  field("Conditions", f.Conditions);
+  lines.push("- **Sources**:", ...d.sources.map((s) => `  - ${s.raw}`));
+  field("Status", f.Status);
+  field("Provenance", p);
+  field("Falsification", f.Falsification);
+  field("Proof", f.Proof);
+  field("Dependencies", f.Dependencies);
+  field("Tags", f.Tags);
+  field("Last revised", revised);
+  return `${lines.join("\n")}\n`;
 }
