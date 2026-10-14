@@ -32,7 +32,8 @@ Status: Accepted (2026-10-14), with the user's changes after a survey of PiPilot
    - **What it proposes, as cards in the chat:**
      - delegate a task to a worker (role, task text, referenced files);
      - add a hypothesis, an exploration-tree node, or a decision. These are ledger writes, made after the user
-       clicks, with provenance `ai-suggested`.
+       clicks, with provenance `user-revised` (the orchestrator drafted it, the user accepted it), as with claims
+       from the gate.
 
      It cannot approve a job or a claim, and it starts nothing by itself (see Open).
    - **Model:** `routing.orchestrator` in models.yaml, chosen by evals (DR-0012). Its calls go through the model
