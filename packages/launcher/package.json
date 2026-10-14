@@ -1,0 +1,17 @@
+{
+  "name": "@cairn/launcher",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Containers, git worktrees, and per-role policy -> mounts/allowlists (DR-0005).",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "dependencies": {
+    "@cairn/shared": "workspace:*"
+  }
+}
