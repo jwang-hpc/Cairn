@@ -151,3 +151,23 @@ describe("check and the claim gate", () => {
     expect((await git(l.dir, ["log", "--oneline"])).trim().split("\n")).toHaveLength(1);
   });
 });
+
+describe("Ledger.create robustness", () => {
+  it("installs no git hook templates", async () => {
+    const { readdir } = await import("node:fs/promises");
+    const l = await create();
+    expect(await readdir(join(l.dir, ".git"))).not.toContain("hooks");
+  });
+
+  it("removes the half-made project when creation fails after the skeleton and git init", async () => {
+    const { stat: st } = await import("node:fs/promises");
+    let calls = 0;
+    const failingClock = () => {
+      if (++calls > 1) throw new Error("clock failure during first commit");
+      return clock;
+    };
+    await expect(Ledger.create({ projectsDir: base, name: "half", title: "t", dataClass: "public" }, failingClock)).rejects.toThrow("clock failure");
+    expect(calls).toBeGreaterThan(1); // it got past the skeleton and git init
+    await expect(st(join(base, "half"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+});
