@@ -8,9 +8,20 @@ import type { Engine } from "../engine.js";
 import type { Ledger } from "../ledger/ledger.js";
 import type { BudgetRun } from "../budget/governor.js";
 import { buildPacket } from "./packet.js";
-import { critiquePrompt, independentPrompt, synthesisPrompt } from "./prompts.js";
+import {
+  critiquePrompt,
+  debateClosingPrompt,
+  debateOpeningPrompt,
+  debateTurnPrompt,
+  independentPrompt,
+  redteamPrompt,
+  relayDraftPrompt,
+  relayFinalPrompt,
+  relayRevisePrompt,
+  synthesisPrompt,
+} from "./prompts.js";
 
-export const ROUND_MODES = ["independent", "critique", "synthesis"] as const;
+export const ROUND_MODES = ["independent", "critique", "debate", "relay", "redteam", "synthesis"] as const;
 export type RoundMode = (typeof ROUND_MODES)[number];
 
 export interface MemberRef {
@@ -24,6 +35,10 @@ export interface PanelSpec {
   rounds: RoundMode[];
   members: MemberRef[];
   synthesizer?: MemberRef;
+  /** debate: proposer/critic exchanges (1-4, default 2). */
+  exchanges?: number;
+  /** redteam: the venue the hostile reviewer reviews for, e.g. "SC" or "HPDC". */
+  venue?: string;
 }
 
 export interface PanelMember {
@@ -36,6 +51,8 @@ export interface PanelMember {
 
 export interface RoundOutput {
   label: string;
+  /** Step within a multi-step round (relay: draft/revision/final; debate: opening/xN-critic/xN-proposer/closing). */
+  step?: string;
   status: "ok" | "refused" | "error";
   file?: string;
   error?: string;
@@ -91,7 +108,17 @@ export function validateSpec(engine: Engine, spec: PanelSpec): string[] {
   const keys = spec.members.map((m) => `${m.alias}@${m.effort}`);
   if (new Set(keys).size !== keys.length) throw new PanelError("duplicate panel member");
   if (spec.rounds.length === 0) throw new PanelError("no rounds requested");
-  if (spec.rounds[0] !== "independent") throw new PanelError("the first round must be independent (critique and synthesis need answers to work on)");
+  const opener = spec.rounds[0]!;
+  if (opener === "critique" || opener === "synthesis") throw new PanelError(`a panel cannot open with ${opener}; it needs answers to work on`);
+  for (const [i, r] of spec.rounds.entries()) {
+    if (!(ROUND_MODES as readonly string[]).includes(r)) throw new PanelError(`unknown round '${r}' (modes: ${ROUND_MODES.join(", ")})`);
+    if (r === "critique" && !spec.rounds.slice(0, i).includes("independent")) throw new PanelError("critique needs an earlier independent round");
+  }
+  if (spec.rounds.includes("redteam") && !spec.venue?.trim()) throw new PanelError("redteam needs a venue (e.g. --venue SC)");
+  if (spec.exchanges !== undefined && !(Number.isInteger(spec.exchanges) && spec.exchanges >= 1 && spec.exchanges <= 4)) throw new PanelError("debate exchanges must be 1-4");
+  if ((spec.rounds.includes("relay") || spec.rounds.includes("debate")) && spec.members.length > 2) {
+    warnings.push("relay and debate use the first two members (Model A and Model B); others sit those rounds out");
+  }
   const synthAt = spec.rounds.indexOf("synthesis");
   if (synthAt !== -1 && synthAt !== spec.rounds.length - 1) throw new PanelError("synthesis must be the last round");
   if (spec.rounds.filter((r) => r === "synthesis").length > 1) throw new PanelError("only one synthesis round");
@@ -168,55 +195,103 @@ export async function runPanel(engine: Engine, ledger: Ledger, spec: PanelSpec, 
   await ledger.writeArtifacts([{ path: rec.packet.file, content: packet.text }, json()], provenance.user, `panel ${id}: start (${spec.rounds.join(" → ")})`, "panel-start");
 
   const run = await engine.governor.startRun("panel", id);
-  const answers = new Map<string, Map<string, string>>(); // round key -> label -> text
+  /** Every successful output so far, in order: what synthesis and later steps can see. */
+  const transcript: { round: number; mode: RoundMode; label: string; step?: string; text: string }[] = [];
+  const latestIndependent = () => {
+    const r = [...rec.rounds].reverse().find((x) => x.mode === "independent");
+    return new Map(transcript.filter((t) => r && t.round === r.n).map((t) => [t.label, t.text]));
+  };
+  const [first, second] = members as [PanelMember, PanelMember];
+
   for (const [i, mode] of spec.rounds.entries()) {
     const n = i + 1;
-    const key = `r${n}-${mode}`;
-    const prevIndependent = answers.get("r1-independent") ?? new Map<string, string>();
-    let jobs: { who: PanelMember; label: string; prompt: { system: string; user: string } }[];
-    if (mode === "independent") {
-      jobs = members.map((m) => ({ who: m, label: m.label, prompt: independentPrompt(m.label, spec.question, packet.text) }));
-    } else if (mode === "critique") {
-      jobs = members
-        .filter((m) => prevIndependent.has(m.label))
-        .map((m) => ({
-          who: m,
-          label: m.label,
-          prompt: critiquePrompt(m.label, spec.question, packet.text, prevIndependent.get(m.label)!, [...prevIndependent].filter(([l]) => l !== m.label).map(([label, text]) => ({ label, text }))),
-        }));
-    } else {
-      const prior = rec.rounds.map((r) => ({
-        title: `Round ${r.n}: ${r.mode}`,
-        outputs: [...(answers.get(`r${r.n}-${r.mode}`) ?? new Map())].map(([label, text]) => ({ label, text })),
-      }));
-      jobs = [{ who: synthesizer!, label: "synthesis", prompt: synthesisPrompt(spec.question, packet.text, prior) }];
-    }
-    if (jobs.length === 0) {
-      rec.warnings.push(`round ${n} (${mode}) skipped: no answers from the previous round`);
-      break;
-    }
-    // Members answer in parallel; commits happen one at a time afterwards.
-    const results = await Promise.all(jobs.map(async (j) => ({ j, a: await ask(engine, run, j.who, ledger.dataClass, j.prompt) })));
     const round: PanelRecord["rounds"][number] = { n, mode, outputs: [] };
     rec.rounds.push(round);
-    const texts = new Map<string, string>();
-    for (const { j, a } of results) {
+    /** Record one answer: failures go in the record; successes are committed under the member's own provenance. */
+    const record = async (who: PanelMember, label: string, step: string | undefined, a: Answer): Promise<string | undefined> => {
       if (!a.text) {
-        round.outputs.push({ label: j.label, status: a.refused ? "refused" : "error", error: a.error ?? "no answer" });
-        continue;
+        round.outputs.push({ label, ...(step ? { step } : {}), status: a.refused ? "refused" : "error", error: a.error ?? "no answer" });
+        return undefined;
       }
-      const file = `${dir(id)}/${key}/${j.label.replace(/^Model /, "")}.md`;
-      round.outputs.push({ label: j.label, status: "ok", file });
-      texts.set(j.label, a.text);
+      const file = `${dir(id)}/r${n}-${mode}/${step ? `${step}-` : ""}${label.replace(/^Model /, "")}.md`;
+      round.outputs.push({ label, ...(step ? { step } : {}), status: "ok", file });
+      transcript.push({ round: n, mode, label, ...(step ? { step } : {}), text: a.text });
       await ledger.writeArtifacts(
-        [{ path: file, content: `${header(rec, mode, j.label)}${a.text}\n` }, json()],
-        provenance.aiSuggested(j.who.model, j.who.effort),
-        `panel ${id}: ${mode} ${j.label}`,
+        [{ path: file, content: `${header(rec, mode, step ? `${label} (${step})` : label)}${a.text}\n` }, json()],
+        provenance.aiSuggested(who.model, who.effort),
+        `panel ${id}: ${mode}${step ? ` ${step}` : ""} ${label}`,
         "panel-output",
       );
+      return a.text;
+    };
+    const say = async (who: PanelMember, step: string | undefined, prompt: { system: string; user: string }) =>
+      record(who, who === synthesizer ? "synthesis" : who.label, step, await ask(engine, run, who, ledger.dataClass, prompt));
+
+    switch (mode) {
+      case "independent": {
+        // Members answer in parallel; commits happen one at a time afterwards.
+        const results = await Promise.all(members.map(async (m) => ({ m, a: await ask(engine, run, m, ledger.dataClass, independentPrompt(m.label, spec.question, packet.text)) })));
+        for (const { m, a } of results) await record(m, m.label, undefined, a);
+        break;
+      }
+      case "critique": {
+        const prev = latestIndependent();
+        const jobs = members.filter((m) => prev.has(m.label));
+        const results = await Promise.all(
+          jobs.map(async (m) => ({
+            m,
+            a: await ask(engine, run, m, ledger.dataClass, critiquePrompt(m.label, spec.question, packet.text, prev.get(m.label)!, [...prev].filter(([l]) => l !== m.label).map(([label, text]) => ({ label, text })))),
+          })),
+        );
+        for (const { m, a } of results) await record(m, m.label, undefined, a);
+        break;
+      }
+      case "relay": {
+        const draft = await say(first, "draft", relayDraftPrompt(first.label, spec.question, packet.text));
+        if (!draft) break;
+        const revision = await say(second, "revision", relayRevisePrompt(second.label, spec.question, packet.text, first.label, draft));
+        if (!revision) break;
+        await say(first, "final", relayFinalPrompt(first.label, spec.question, packet.text, draft, second.label, revision));
+        break;
+      }
+      case "debate": {
+        const exchanges = spec.exchanges ?? 2;
+        const opening = latestIndependent().get(first.label) ?? (await say(first, "opening", debateOpeningPrompt(first.label, spec.question, packet.text)));
+        if (!opening) break;
+        const history: { label: string; text: string }[] = [{ label: `${first.label} (proposer)`, text: opening }];
+        let cut = false;
+        for (let k = 1; k <= exchanges && !cut; k++) {
+          const attack = await say(second, `x${k}-critic`, debateTurnPrompt(second.label, "critic", spec.question, packet.text, history));
+          if (!attack) cut = true;
+          else {
+            history.push({ label: `${second.label} (critic)`, text: attack });
+            const reply = await say(first, `x${k}-proposer`, debateTurnPrompt(first.label, "proposer", spec.question, packet.text, history));
+            if (!reply) cut = true;
+            else history.push({ label: `${first.label} (proposer)`, text: reply });
+          }
+        }
+        for (const [who, role] of [[first, "proposer"], [second, "critic"]] as const) {
+          await say(who, "closing", debateClosingPrompt(who.label, role, spec.question, packet.text, history));
+        }
+        break;
+      }
+      case "redteam": {
+        const prior = transcript.map((t) => ({ label: `${t.label}${t.step ? ` (${t.step})` : ""}, round ${t.round} ${t.mode}`, text: t.text }));
+        await say(first, "review", redteamPrompt(first.label, spec.venue!, spec.question, packet.text, prior));
+        break;
+      }
+      case "synthesis": {
+        const byRound = rec.rounds
+          .filter((r) => r.n < n)
+          .map((r) => ({
+            title: `Round ${r.n}: ${r.mode}`,
+            outputs: transcript.filter((t) => t.round === r.n).map((t) => ({ label: `${t.label}${t.step ? ` (${t.step})` : ""}`, text: t.text })),
+          }));
+        await say(synthesizer!, undefined, synthesisPrompt(spec.question, packet.text, byRound));
+        break;
+      }
     }
-    answers.set(key, texts);
-    if (texts.size === 0) {
+    if (!round.outputs.some((o) => o.status === "ok")) {
       rec.warnings.push(`round ${n} (${mode}) produced no answers; later rounds not run`);
       break;
     }
@@ -269,7 +344,7 @@ export function renderPanel(record: PanelRecord, texts: Map<string, string>): st
   for (const r of record.rounds) {
     out.push("", `── round ${r.n}: ${r.mode} ${"─".repeat(Math.max(0, 50 - r.mode.length))}`);
     for (const o of r.outputs) {
-      out.push("", `### ${who(o.label)}`);
+      out.push("", `### ${who(o.label)}${o.step ? ` (${o.step})` : ""}`);
       out.push(o.status === "ok" ? (texts.get(o.file!) ?? "").replace(/^<!--[\s\S]*?-->\n\n/, "").trim() : `[${o.status}] ${o.error}`);
     }
   }

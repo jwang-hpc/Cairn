@@ -66,3 +66,68 @@ export function synthesisPrompt(question: string, packet: string, rounds: { titl
     ].join("\n"),
   };
 }
+
+type Prompt = { system: string; user: string };
+const q = (question: string, packet: string) => `${packet}\n\n## Question for the panel\n\n${question}\n`;
+const hist = (history: { label: string; text: string }[]) => history.map((h) => `### ${h.label}\n\n${h.text}\n`).join("\n");
+
+// relay: A drafts, B revises, A finalizes (DR-0008).
+export function relayDraftPrompt(label: string, question: string, packet: string): Prompt {
+  return {
+    system: `${COMMON}\nYou are ${label}. Write a first draft answer; another member will revise it.`,
+    user: `${q(question, packet)}\nWrite the draft in Markdown. Mark anything you are unsure of.`,
+  };
+}
+export function relayRevisePrompt(label: string, question: string, packet: string, drafter: string, draft: string): Prompt {
+  return {
+    system: `${COMMON}\nYou are ${label}. Revise ${drafter}'s draft: fix errors, close gaps, strengthen weak arguments. Keep what is right; do not rewrite for style.`,
+    user: `${q(question, packet)}\n## Draft by ${drafter}\n\n${draft}\n\nReturn the revised text, then a section "### Changes" listing each change and why.`,
+  };
+}
+export function relayFinalPrompt(label: string, question: string, packet: string, draft: string, reviser: string, revision: string): Prompt {
+  return {
+    system: `${COMMON}\nYou are ${label}. Finalize: accept or reject each of ${reviser}'s changes on its merits, with a one-line reason each. Do not accept a change just because it was proposed.`,
+    user: `${q(question, packet)}\n## Your draft\n\n${draft}\n\n## Revision by ${reviser}\n\n${revision}\n\nReturn the final text, then "### Decisions on changes" (accepted/rejected + reason).`,
+  };
+}
+
+// debate: proposer vs critic for N exchanges, ending with unresolved disagreements (DR-0008).
+export function debateOpeningPrompt(label: string, question: string, packet: string): Prompt {
+  return {
+    system: `${COMMON}\nYou are ${label}, the proposer in a debate. State the strongest defensible position and its key arguments.`,
+    user: `${q(question, packet)}\nRespond with "### Position" and "### Arguments".`,
+  };
+}
+export function debateTurnPrompt(label: string, role: "proposer" | "critic", question: string, packet: string, history: { label: string; text: string }[]): Prompt {
+  const brief =
+    role === "critic"
+      ? "Attack the proposer's latest argument with specific counterarguments or missing evidence. No general skepticism."
+      : "Answer the critic's latest points. Hold your position unless a specific argument defeats it; if you concede a point, say exactly which argument made you concede.";
+  return {
+    system: `${COMMON}\nYou are ${label}, the ${role} in a debate. ${brief}`,
+    user: `${q(question, packet)}\n## Debate so far\n\n${hist(history)}\nYour turn (${role}). Be concise and specific.`,
+  };
+}
+export function debateClosingPrompt(label: string, role: "proposer" | "critic", question: string, packet: string, history: { label: string; text: string }[]): Prompt {
+  return {
+    system: `${COMMON}\nYou are ${label}, the ${role}. Close the debate honestly. Do not restate agreement or declare a winner.`,
+    user: `${q(question, packet)}\n## Debate\n\n${hist(history)}\nRespond with "### Points I conceded (and why)" and "### Unresolved disagreements (each with the evidence or experiment that would settle it)".`,
+  };
+}
+
+// redteam: one member is a hostile reviewer for a named venue (DR-0008).
+export function redteamPrompt(label: string, venue: string, question: string, packet: string, prior: { label: string; text: string }[]): Prompt {
+  return {
+    system: [
+      COMMON,
+      `You are ${label}, acting as a hostile but fair reviewer for ${venue}. Your job is to find the reasons this work would be rejected.`,
+      "Check novelty, soundness, baselines and controls, threats to validity, missing related work, and whether the claims follow from the evidence.",
+      "Be specific: every criticism must point at something in the packet (or its absence). No invented citations.",
+    ].join("\n"),
+    user: [
+      q(question, packet),
+      ...(prior.length ? ["## Panel work so far", hist(prior)] : []),
+      `Write a ${venue} review in Markdown: "### Summary", "### Major weaknesses (numbered)", "### Minor issues", "### What would change my score", "### Score (1-5) and confidence (1-5)".`,
+    ].join("\n"),
+  };
+}
