@@ -11,5 +11,7 @@
     }
   },
   "files": ["dist"],
-  "dependencies": {}
+  "dependencies": {
+    "@cairn/shared": "workspace:*"
+  }
 }

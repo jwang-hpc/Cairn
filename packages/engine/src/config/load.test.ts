@@ -90,6 +90,12 @@ describe("loadConfig", () => {
     expect(await problems()).toContain("machines.yaml: machines.bebop.paths: DOE machines must declare allowed_prefixes (DR-0006)");
   });
 
+  it("keeps a machine's scratch inside its allowed prefixes", async () => {
+    // bebop is the last machine: change its scratch line only.
+    await edit("machines", (t) => t.replace(/scratch: "\/scratch\/USER"(?![\s\S]*scratch:)/, 'scratch: "/home/USER/scratch"'));
+    expect(await problems()).toContain("machines.yaml: machines.bebop.scratch: /home/USER/scratch is not under paths.allowed_prefixes");
+  });
+
   it("rejects budget caps for unknown providers and roles", async () => {
     await edit("engine", (t) =>
       t.replace("per_provider: { anthropic: 5, openai: 5 }", "per_provider: { anthropic: 5, gemini: 5 }").replace(
