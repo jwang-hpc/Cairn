@@ -2,7 +2,7 @@
 effort_levels: [low, medium, high, max]
 providers:
   anthropic: { auth: oauth, fallback: api_key, data_classes: [public, unpublished], terms_checked: "<date>" }
-  openai:    { auth: oauth, fallback: api_key, data_classes: [public, unpublished], terms_checked: "<date>" }
+  openai:    { auth: oauth, via: openai-codex, fallback: api_key, data_classes: [public, unpublished], terms_checked: "<date>" }  # M0: Sign in with ChatGPT (api.openai.com) returns 520; Plus via pi-ai openai-codex works
   google:    { auth: api_key, via: "<gemini-api|vertex>", data_classes: [public], terms_checked: "<date>" }
   microsoft: { auth: api_key, via: "<foundry|openrouter|fireworks|baseten>", data_classes: [public], terms_checked: "<date>" }
 models:
@@ -12,9 +12,11 @@ models:
   gpt-frontier:  { provider: openai,    id: "<set at M0>",     tool_use: "<eval>", context: "<n>" }
   gemini-frontier: { provider: google,  id: "<set at M0>",     tool_use: "<eval>", context: "<n>" }
   mai-thinking:  { provider: microsoft, id: "<provider slug>", tool_use: "<eval>", context: "<n>" }
-effort_map:   # engine level -> native setting, per provider (fill at M0)
-  anthropic: { low: "<>", medium: "<>", high: "<>", max: "<>" }
-  openai:    { low: "<>", medium: "<>", high: "<>", max: "<>" }
+effort_map:   # engine level -> native setting, per provider (M0: measured with pi-ai 1.2.0, spikes/pi-auth/REPORT.md)
+  # Claude 5.x: adaptive thinking; effective value is the per-turn system message output_config.effort
+  anthropic: { low: "effort=low", medium: "effort=medium", high: "effort=high", max: "effort=max" }
+  # Responses API (api.openai.com and openai-codex alike)
+  openai:    { low: "reasoning.effort=low", medium: "reasoning.effort=medium", high: "reasoning.effort=high", max: "reasoning.effort=max" }
   google:    { low: "<>", medium: "<>", high: "<>", max: "<>" }
   microsoft: { low: "<>", medium: "<>", high: "<>", max: "<>" }
 routing:
