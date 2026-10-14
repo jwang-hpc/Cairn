@@ -1,24 +1,45 @@
 # Model registry + routing. Model IDs live only here. Grades come from evals/, not assumptions.
-effort_levels: [low, medium, high, max]
+# Copy to config/models.yaml (gitignored) and edit.
 providers:
-  anthropic: { auth: oauth, fallback: api_key, data_classes: [public, unpublished], terms_checked: "<date>" }
-  openai:    { auth: oauth, via: openai-codex, fallback: api_key, data_classes: [public, unpublished], terms_checked: "<date>" }  # M0: Sign in with ChatGPT (api.openai.com) returns 520; Plus via pi-ai openai-codex works
-  google:    { auth: api_key, via: "<gemini-api|vertex>", data_classes: [public], terms_checked: "<date>" }
-  microsoft: { auth: api_key, via: "<foundry|openrouter|fireworks|baseten>", data_classes: [public], terms_checked: "<date>" }
+  # routes are tried in order: subscription first, API key as fallback (DR-0010).
+  # pi_provider is the pi-ai provider id that carries the call.
+  anthropic:
+    routes:
+      - { pi_provider: anthropic, auth: oauth }      # Claude subscription (M0: works on the Team seat)
+      - { pi_provider: anthropic, auth: api_key }
+    data_classes: [public, unpublished]
+    terms_checked: unchecked
+  openai:
+    routes:
+      - { pi_provider: openai-codex, auth: oauth }   # ChatGPT Plus (M0: Sign in with ChatGPT via api.openai.com returns 520)
+      - { pi_provider: openai, auth: api_key }
+    data_classes: [public, unpublished]
+    terms_checked: unchecked
+  google:
+    routes:
+      - { pi_provider: google, auth: api_key }       # Gemini API; use google-vertex for Vertex AI (open question 7)
+    data_classes: [public]
+    terms_checked: unchecked
+  microsoft:
+    routes:
+      - { pi_provider: "<openrouter|fireworks|baseten|custom>", auth: api_key }   # MAI host (open question 8)
+    data_classes: [public]
+    terms_checked: unchecked
 models:
-  claude-opus:   { provider: anthropic, id: claude-opus-5-5,   tool_use: "<eval>", context: "<n>" }
-  claude-sonnet: { provider: anthropic, id: claude-sonnet-5-5, tool_use: "<eval>", context: "<n>" }
-  claude-haiku:  { provider: anthropic, id: claude-haiku-5-5,  tool_use: "<eval>", context: "<n>" }
-  gpt-frontier:  { provider: openai,    id: "<set at M0>",     tool_use: "<eval>", context: "<n>" }
-  gemini-frontier: { provider: google,  id: "<set at M0>",     tool_use: "<eval>", context: "<n>" }
-  mai-thinking:  { provider: microsoft, id: "<provider slug>", tool_use: "<eval>", context: "<n>" }
-effort_map:   # engine level -> native setting, per provider (M0: measured with pi-ai 1.2.0, spikes/pi-auth/REPORT.md)
-  # Claude 5.x: adaptive thinking; effective value is the per-turn system message output_config.effort
-  anthropic: { low: "effort=low", medium: "effort=medium", high: "effort=high", max: "effort=max" }
-  # Responses API (api.openai.com and openai-codex alike)
-  openai:    { low: "reasoning.effort=low", medium: "reasoning.effort=medium", high: "reasoning.effort=high", max: "reasoning.effort=max" }
-  google:    { low: "<>", medium: "<>", high: "<>", max: "<>" }
-  microsoft: { low: "<>", medium: "<>", high: "<>", max: "<>" }
+  claude-opus:     { provider: anthropic, id: claude-opus-5-5,   tool_use: untested }
+  claude-sonnet:   { provider: anthropic, id: claude-sonnet-5-5, tool_use: untested }
+  claude-haiku:    { provider: anthropic, id: claude-haiku-5-5,  tool_use: untested }
+  gpt-frontier:    { provider: openai,    id: gpt-6.1-sol,       tool_use: untested }   # M0-tested; frontier pick is for evals (M10)
+  gemini-frontier: { provider: google,    id: "<set when tested>", tool_use: untested }
+  mai-thinking:    { provider: microsoft, id: "<provider slug>",   tool_use: untested }
+# Engine effort level -> pi-ai reasoning level (pi-ai then sets the native control).
+effort_map:
+  # Claude 5.x: adaptive thinking; effective value is the per-turn system message output_config.effort (M0)
+  anthropic: { low: low, medium: medium, high: high, max: max }
+  # Responses API, api.openai.com and openai-codex alike: reasoning.effort (M0)
+  openai:    { low: low, medium: medium, high: high, max: max }
+  google:    { low: low, medium: medium, high: high, max: max }   # unverified
+  microsoft: { low: low, medium: medium, high: high, max: max }   # unverified
 routing:
   ideation:   { panel: [claude-opus@high, gpt-frontier@high, gemini-frontier@high], synthesizer: mai-thinking@high }
   critique:   { panel: [claude-opus@high, gpt-frontier@high], synthesizer: gemini-frontier@high }
