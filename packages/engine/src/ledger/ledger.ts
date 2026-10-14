@@ -38,8 +38,8 @@ const DECISIONS = "engine/decisions.md";
 const LOG = "engine/ledger.jsonl";
 /** Reserved for the claim gate (invariant 5). */
 const CLAIM_GATED = new Set(["logic/claims.md"]);
-/** Where engine artifacts may be written via writeArtifacts(). */
-const ARTIFACT_AREAS = ["engine/panels/"];
+/** Where engine artifacts may be written via writeArtifacts(): panel rounds, job records, executor evidence. */
+const ARTIFACT_AREAS = ["engine/panels/", "engine/jobs/", "evidence/raw/"];
 
 const pad = (n: number) => String(n).padStart(2, "0");
 /** ARA timestamp: local "YYYY-MM-DDTHH:MM". */
@@ -281,10 +281,10 @@ export class Ledger {
   }
 
   /**
-   * Engine artifacts (panel rounds, later requests and campaigns) under engine/<area>/. One tagged commit per call;
-   * paths outside the artifact areas are refused.
+   * Engine artifacts (panel rounds, job records, and executor evidence under evidence/raw/, DR-0007). One tagged commit
+   * per call; paths outside the artifact areas are refused.
    */
-  async writeArtifacts(files: { path: string; content: string }[], prov: Provenance, summary: string, op = "write-artifact"): Promise<void> {
+  async writeArtifacts(files: { path: string; content: string | Uint8Array }[], prov: Provenance, summary: string, op = "write-artifact"): Promise<void> {
     this.#requireProvenance(prov);
     if (files.length === 0) throw new LedgerError("nothing to write");
     const paths: string[] = [];

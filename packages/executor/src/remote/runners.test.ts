@@ -27,7 +27,7 @@ beforeAll(async () => {
   scratch = await mkdtemp(join(tmpdir(), "cairn-remote-"));
 });
 afterAll(async () => {
-  await rm(scratch, { recursive: true, force: true });
+  await rm(scratch, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 });
 
 const machine = (over: Partial<MachineConfig> = {}): MachineConfig => ({ host: "local", scheduler: "none", scratch, ...over });

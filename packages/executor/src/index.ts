@@ -15,3 +15,7 @@ export {
   SlurmRunner,
   WorkstationRunner,
 } from "./remote/runners.js";
+export { AuditLog, type AuditRecord } from "./jobs/audit.js";
+export { renderCard } from "./jobs/card.js";
+export { describeFiles, fingerprint, JobError, JobStore, snapshotExperiment } from "./jobs/store.js";
+export { type JobLedger, JobService, type JobServiceOptions, type SubmitRequest } from "./jobs/service.js";

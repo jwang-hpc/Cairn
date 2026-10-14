@@ -96,8 +96,18 @@ export interface JobRecord {
   preflight?: { ok: boolean; detail: string };
   approval?: { by: "user" | "auto"; at: string; note?: string };
   denial?: { at: string; reason: string };
+  /** Launch attempts so far; attempt n > 1 uses <job>-r<n> as its remote directory. */
+  attempts?: number;
   remote?: { host: string; dir: string; id: string; submitted: string };
-  results?: { at: string; dir: string; files: string[]; referenced: { path: string; bytes: number }[]; missing: string[] };
+  /** dir: ledger directory (evidence/raw/EXP-NNN/<job>); referenced: too large to copy, left on the machine. */
+  results?: {
+    at: string;
+    dir: string;
+    files: string[];
+    referenced: { path: string; bytes: number }[];
+    missing: string[];
+    refused: { path: string; reason: string }[];
+  };
   error?: string;
   history: { at: string; state: JobState; note?: string }[];
 }
