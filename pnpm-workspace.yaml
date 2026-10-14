@@ -1,0 +1,6 @@
+packages:
+  - packages/*
+
+# Exact pins only (CLAUDE.md). Dependency lifecycle scripts stay disabled unless listed.
+savePrefix: ""
+onlyBuiltDependencies: []

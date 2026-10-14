@@ -1,0 +1,14 @@
+{
+  "name": "@cairn/shared",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Schemas (TypeBox), types, and the normalized event-log format shared by all packages.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist"]
+}

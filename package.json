@@ -1,0 +1,21 @@
+{
+  "name": "cairn",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.34.6",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b && tsc -p tsconfig.check.json",
+    "test": "vitest run",
+    "clean": "tsc -b --clean",
+    "re": "node packages/engine/dist/bin.js"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.0",
+    "typescript": "7.0.2",
+    "vitest": "5.0.2"
+  }
+}

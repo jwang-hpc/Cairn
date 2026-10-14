@@ -10,3 +10,7 @@ worktrees/
 outbox/
 .engine/
 .claude/settings.local.json
+# Repo-local package-manager caches (used inside the Claude Code sandbox)
+.pnpm-store/
+.corepack/
+*.tsbuildinfo
