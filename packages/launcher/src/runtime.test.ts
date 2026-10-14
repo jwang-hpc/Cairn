@@ -1,6 +1,9 @@
 import type { RolesConfig } from "@cairn/shared";
 import { describe, expect, it } from "vitest";
-import { type CommandRunner, ContainerRuntime, cliRunner, type RunResult, RuntimeError } from "./runtime.js";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { PROXY_PORT } from "./sandbox.js";
+import { AGENT_NET_POOL, agentGateway, agentSubnet, type CommandRunner, ContainerRuntime, cliRunner, type RunResult, RuntimeError } from "./runtime.js";
 import { specForRole } from "./policy.js";
 
 const ok = (stdout = "", code = 0): RunResult => ({ code, stdout, stderr: code ? "boom" : "", truncated: false, timedOut: false, durationMs: 1 });
@@ -17,15 +20,26 @@ function fake(responses: Record<string, RunResult> = {}) {
   return { runner, calls };
 }
 
-const netJson = (mode: string) =>
-  JSON.stringify([{ configuration: { mode }, status: { ipv4Gateway: "192.168.128.1", ipv4Subnet: "192.168.128.0/24" } }]);
+const netJson = (mode: string, n = 240) =>
+  JSON.stringify([{ configuration: { mode }, status: { ipv4Gateway: `192.168.${n}.1`, ipv4Subnet: `192.168.${n}.0/24` } }]);
 
 describe("ContainerRuntime (fake runner)", () => {
-  it("creates a host-only network and returns its gateway", async () => {
+  it("creates a host-only network in the agent pool (fixed for the pf anchor) and returns its gateway", async () => {
     const f = fake({ "network inspect": ok(netJson("hostOnly")) });
     const net = await new ContainerRuntime(f.runner).createInternalNetwork("cairn-net-a1");
-    expect(net).toEqual({ name: "cairn-net-a1", gateway: "192.168.128.1", subnet: "192.168.128.0/24" });
-    expect(f.calls[0]).toEqual(["network", "create", "--internal", "cairn-net-a1"]);
+    expect(net).toEqual({ name: "cairn-net-a1", gateway: "192.168.240.1", subnet: "192.168.240.0/24" });
+    expect(f.calls[0]).toEqual(["network", "create", "--internal", "--subnet", "192.168.240.0/24", "cairn-net-a1"]);
+  });
+
+  it("takes the next free /24 when one is in use, and refuses a network that came up elsewhere", async () => {
+    const f = fake({ "network create --internal --subnet 192.168.240.0/24": ok("", 1), "network inspect": ok(netJson("hostOnly", 241)) });
+    expect((await new ContainerRuntime(f.runner).createInternalNetwork("cairn-net-a2")).gateway).toBe("192.168.241.1");
+    const g = fake({ "network inspect": ok(netJson("hostOnly", 128)) });
+    await expect(new ContainerRuntime(g.runner).createInternalNetwork("cairn-net-a3")).rejects.toThrow(/came up as 192.168.128.0\/24/);
+    expect(g.calls.at(-1)).toEqual(["network", "delete", "cairn-net-a3"]);
+    const full = fake({ "network create": ok("", 1) });
+    await expect(new ContainerRuntime(full.runner).createInternalNetwork("cairn-net-a4")).rejects.toThrow(/failed for every subnet in the agent pool 192.168.240.0\/20/);
+    expect(full.calls).toHaveLength(16);
   });
 
   it("deletes and refuses a network that came up with internet access", async () => {
@@ -76,5 +90,16 @@ describe("cliRunner (real process, /bin/sh standing in for the CLI)", () => {
   });
   it("reports a missing binary as exit 127", async () => {
     expect((await cliRunner("/nonexistent/container").run(["list"])).code).toBe(127);
+  });
+});
+
+describe("agent network pool and the pf anchor (open question 12)", () => {
+  it("scripts/pf-agents.sh lets each pool subnet reach only its own gateway's proxy, and blocks the rest of the pool", () => {
+    const script = fileURLToPath(new URL("../../../scripts/pf-agents.sh", import.meta.url));
+    const rules = execFileSync("sh", [script, "rules"], { encoding: "utf8" }).trim().split("\n").filter((l) => !l.startsWith("#"));
+    const expected = Array.from({ length: AGENT_NET_POOL.count }, (_, i) =>
+      `pass in quick inet proto tcp from ${agentSubnet(i)} to ${agentGateway(i)} port ${PROXY_PORT} flags S/SA keep state`,
+    );
+    expect(rules).toEqual([...expected, `block return in quick inet from ${AGENT_NET_POOL.cidr} to any`]);
   });
 });

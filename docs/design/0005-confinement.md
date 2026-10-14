@@ -48,3 +48,14 @@ executor tool without a valid token; submit a job violating machine policy. Ever
   internal network via the gateway.
 - **Escape tests to add in M2:** host-port probe from an agent container; container-to-container on the
   same network; `--network none` (accepted by the CLI, isolation unverified — don't rely on it).
+
+## Amendment (2026-10-14): host firewall for agent networks (open question 12)
+- Agent networks are created in a fixed pool, `192.168.240.0/20`: agent *i* gets `192.168.(240+i).0/24` with its
+  gateway at `.1` (`container network create --internal --subnet`; the launcher verifies the result and takes the
+  next free /24 when one is in use). 16 concurrent agents.
+- A static pf ruleset (`scripts/pf-agents.sh`, installed once with sudo, reloaded at boot by a LaunchDaemon) loads
+  into Apple's `com.apple/*` anchor slot: each agent subnet may open TCP only to its own gateway's egress proxy
+  (port 3128); everything else from the pool to the Mac is refused. Host services bound to all interfaces (AirPlay
+  Receiver, dev servers) are no longer reachable from agents, whatever the user runs.
+- Escape test 4b now asserts this (it measured before). IPv6 from agents to the host is measured by test 4c; the
+  guard is IPv4 only until that shows an IPv6 path.

@@ -1,5 +1,6 @@
 // Escape suite (DR-0005). Real agent sandboxes attempt each escape from inside; every attempt must fail and
 // leave a trace (event log, egress decision, or executor audit). Run: `pnpm test:escape` (your terminal).
+import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:net";
@@ -193,13 +194,30 @@ describe.skipIf(!ON)("escape suite (DR-0005)", () => {
     expect((await py(A, "executor via gateway", probe(executor.port))).stdout).toMatch(/^CLOSED/);
   });
 
-  it("4b. measure: host services bound to all interfaces (DR-0005 amendment F2)", async () => {
+  it("4b. host services bound to all interfaces are unreachable too (pf guard: scripts/pf-agents.sh)", async () => {
     const results: string[] = [];
     for (const port of [wildcardPort, 22, 5000, 7000, 3000, 8000, 8080]) {
       const r = await py(A, `probe gateway:${port}`, `import socket\ntry:\n socket.create_connection(('${A.network.gateway}',${port}),3); print('OPEN')\nexcept Exception as e: print('CLOSED')`);
       results.push(`${port === wildcardPort ? `${port} (test service on 0.0.0.0)` : port}: ${r.stdout.trim()}`);
     }
     console.warn(`host ports reachable from an agent via its gateway:\n  ${results.join("\n  ")}`);
+    expect(results.filter((r) => r.endsWith("OPEN")), "install the pf guard: sudo sh scripts/pf-agents.sh install").toEqual([]);
+  });
+
+  it("4c. measure: IPv6 from an agent to the host's bridge addresses", async () => {
+    // The pf guard is IPv4; this shows whether an IPv6 path to the host exists at all.
+    const v6port = await listen("::", "v6-service");
+    const ifc = execFileSync("ifconfig", { encoding: "utf8" });
+    const block = ifc.split(/\n(?=\S)/).find((b) => b.includes(`inet ${A.network.gateway} `)) ?? "";
+    const addrs = [...block.matchAll(/inet6 ([0-9a-f:]+)(?:%\S+)?/g)].map((m) => m[1]!);
+    const inside = await attempt(A, "agent IPv6 addresses", "cat /proc/net/if_inet6 2>/dev/null; true");
+    const results: string[] = [];
+    for (const a of addrs) {
+      const target = a.startsWith("fe80") ? `${a}%eth0` : a;
+      const r = await py(A, `probe [${target}]:${v6port}`, `import socket\ntry:\n ai = socket.getaddrinfo('${target}', ${v6port}, socket.AF_INET6, socket.SOCK_STREAM)[0]\n s = socket.socket(socket.AF_INET6, socket.SOCK_STREAM); s.settimeout(3); s.connect(ai[4]); print('OPEN')\nexcept Exception as e: print('CLOSED', type(e).__name__)`);
+      results.push(`[${target}]:${v6port}: ${r.stdout.trim()}`);
+    }
+    console.warn(`IPv6: agent interfaces:\n${inside.stdout.trim() || "  (none)"}\nhost bridge addresses probed:\n  ${results.join("\n  ") || "(the bridge has no IPv6 address)"}`);
   });
 
   it("5. agents cannot reach each other", async () => {

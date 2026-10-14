@@ -59,7 +59,8 @@ in evidence/raw/.
 submitted EXP-001 (pure-Python prime sieve), the user approved it from the card, it ran on the workstation (exit 0),
 and `results.csv` landed in `evidence/raw/EXP-001/<job>/`; `re ledger check`: 6 writes, 6 commits, all tagged
 (ai-suggested → user → ai-executed). The run also found a launcher bug (single-file role mounts; fixed in M5.6).
-UNCC HPC (Slurm) is implemented and tested against a fake Slurm only; escape test 6b awaits a container run.
+The same acceptance on **UNCC HPC** (Slurm 24.11) passed too: the card showed the `sbatch --test-only` estimate,
+Slurm job 27314225 completed (sacct), results fetched, ledger clean. Escape suite: 11/11 (6b included).
 
 ## M6 — Analysis and claim gate
 Python parser framework; support check (code-first, provcheck-style); rigor review; user approval into

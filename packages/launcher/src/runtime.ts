@@ -97,6 +97,15 @@ export interface NetworkInfo {
   subnet: string;
 }
 
+/**
+ * Agent networks live in one fixed pool, one /24 per agent with its gateway at .1, so a single static pf anchor
+ * (scripts/pf-agents.sh) can let each agent reach only its own egress proxy on the Mac (open question 12, DR-0005
+ * amendment). Keep this in sync with that script; a unit test checks it.
+ */
+export const AGENT_NET_POOL = { cidr: "192.168.240.0/20", first: 240, count: 16 } as const;
+export const agentSubnet = (i: number) => `192.168.${AGENT_NET_POOL.first + i}.0/24`;
+export const agentGateway = (i: number) => `192.168.${AGENT_NET_POOL.first + i}.1`;
+
 export class ContainerRuntime {
   constructor(readonly runner: CommandRunner = cliRunner()) {}
 
@@ -106,16 +115,31 @@ export class ContainerRuntime {
     return r;
   }
 
-  /** Host-only network for one agent; returns its gateway (where the egress proxy listens). */
+  /**
+   * Host-only network for one agent, in the next free /24 of the agent pool; returns its gateway (where the egress
+   * proxy listens). A subnet taken by another agent makes create fail, so the next one is tried.
+   */
   async createInternalNetwork(name: string): Promise<NetworkInfo> {
     if (!/^cairn-net-[a-z0-9-]+$/.test(name)) throw new RuntimeError(`network name must be cairn-net-<agent id>: ${name}`);
-    await this.#ok(["network", "create", "--internal", name], `network create ${name}`);
-    const info = await this.inspectNetwork(name);
-    if (info.mode !== "hostOnly") {
-      await this.deleteNetwork(name).catch(() => {});
-      throw new RuntimeError(`network ${name} is ${info.mode}, expected hostOnly`);
+    let last: RunResult | undefined;
+    for (let i = 0; i < AGENT_NET_POOL.count; i++) {
+      const r = await this.runner.run(["network", "create", "--internal", "--subnet", agentSubnet(i), name]);
+      if (r.code !== 0) {
+        last = r;
+        continue;
+      }
+      const info = await this.inspectNetwork(name);
+      const problem =
+        info.mode !== "hostOnly" ? `is ${info.mode}, expected hostOnly`
+        : info.subnet !== agentSubnet(i) || info.gateway !== agentGateway(i) ? `came up as ${info.subnet} via ${info.gateway}, expected ${agentSubnet(i)} via ${agentGateway(i)}`
+        : undefined;
+      if (problem) {
+        await this.deleteNetwork(name).catch(() => {});
+        throw new RuntimeError(`network ${name} ${problem}`);
+      }
+      return { name, gateway: info.gateway, subnet: info.subnet };
     }
-    return { name, gateway: info.gateway, subnet: info.subnet };
+    throw new RuntimeError(`network create ${name} failed for every subnet in the agent pool ${AGENT_NET_POOL.cidr}: ${oneLine(last?.stderr || last?.stdout || "")}`, last);
   }
 
   async inspectNetwork(name: string): Promise<NetworkInfo & { mode: string }> {
