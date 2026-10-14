@@ -42,6 +42,9 @@ Acceptance: `re project new`, `re hypothesis add`, tree renders as text; every w
 Modes: independent, critique, debate, relay, redteam, synthesis; blind labels; storage in engine/panels/.
 Acceptance: an independent + critique run over a hypothesis with members from at least three vendors,
 stored and replayable; a restricted-class project is refused by a disallowed provider.
+**Amendment (2026-10-14, user decision):** two or more vendors suffice for M4 acceptance (Claude + GPT are
+configured); a third vendor joins once its key and data terms are settled (open questions 7, 8). Until then the
+synthesizer is a model outside the panel (DR-0013) but may share a vendor with a member; that is recorded.
 
 ## M5 — Executor (host MCP servers)
 jobs.submit/status/fetch_results/cancel with linting against machines.yaml and approval requests;
