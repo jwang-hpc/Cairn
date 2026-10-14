@@ -12,6 +12,28 @@ hand-editing YAML.
 - Decide: whether Cairn writes SSH host entries into its **own** file that `~/.ssh/config` `Include`s
   (recommended: Cairn never rewrites the user's `~/.ssh/config`) or only references existing aliases.
 
+## Machine and job status in the app
+*Requested 2026-10-14.* The app should show each machine's live state (free GPUs, free disk on scratch, load,
+memory) and the state of HPC jobs, so the user can see what's running and what a new job would compete with.
+- Fits: M8 (app: job/campaign monitor), with collection in the executor (M5 transport) and the optional
+  workstation poller of M9.
+- What to collect, all through the executor's existing mux-only transport and read-only commands:
+  - **Workstation:** `nvidia-smi --query-gpu=index,name,memory.used,memory.total,utilization.gpu --format=csv`,
+    `df -Pk <scratch>`, `/proc/loadavg`, `/proc/meminfo`, and Cairn's own running jobs (`.cairn/` state).
+  - **Slurm HPCs:** `sinfo` per allowed partition (idle/mixed/allocated nodes, GPUs via GRES), `squeue -u $USER`
+    (all the user's jobs, not only Cairn's), `sshare` (fair-share), scratch usage (`df`/`lfs quota` where the
+    site supports it). Job state already comes from `squeue`/`sacct` (M5); the app shows it live.
+- Shape: `re machine status [name]` first (CLI-first rule, DR-0002), then the app polls the engine API. Each
+  snapshot carries its time; with no open SSH session the app shows the last snapshot and its age rather than
+  opening a connection (the user's master is the human gate, DR-0006).
+- Uses: the approval card can show the machine's current state next to the request (e.g. "requests 1 GPU; 0 of
+  1 free now"), and lint can warn when a job asks for more than is free. Whether agents may see machine status
+  (via a read-only `jobs.machines` tool) is a separate decision: it would send partition and load details to
+  model providers.
+- Decide: polling interval and when to poll (only while a master is open, or via the M9 workstation poller
+  that writes snapshots the executor reads); what the HPC centre's policies allow for periodic `sinfo`/`squeue`
+  calls (keep them infrequent).
+
 ## Count skill usage
 *Requested 2026-10-14.* How often each skill is actually used.
 - Fits: the skill loader (DR-0012: metadata first, body on use), not yet scheduled.
