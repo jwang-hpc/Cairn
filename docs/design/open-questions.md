@@ -6,6 +6,12 @@
 3. Facility policy for agents/commercial model services on LCRC and other DOE systems (blocks Tier 1 only).
 4. University IT policy on self-hosted GitHub runners / pollers on the workstation (blocks async trigger only).
 5. MCP: pi-mono now ships `@earendil-works/pi-mcp`; M0 verifies it against our executor (Streamable HTTP + bearer token).
+   **M0 (2026-10-14): works** — pi-mcp 1.2.0 against a stub executor (MCP SDK 1.31.0 server) over Streamable
+   HTTP, in-process and on a real loopback socket: bearer token required (missing/wrong → 401, logged), tools
+   listed and called, MCP tools wrapped as pi-agent-core tools, live Claude and GPT called them correctly.
+   Caveats: pi-mcp has no elicitation, so approvals are out-of-band (tool returns `pending_approval`, human
+   approves in app/CLI); DR tool names with dots need a reversible mapping for providers. Details:
+   spikes/pi-mcp/REPORT.md.
 6. Does pi-ai subscription auth work on the Claude Team seat? (M0 spike; API fallback otherwise.)
    **M0 (2026-10-13): works** — login, calls at all four effort levels, and an agent tool loop succeed
    (claude-haiku-5-5, pi-ai 1.2.0). Caveat: pi-ai prepends a "You are Claude Code…" system prompt on this
