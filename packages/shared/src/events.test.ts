@@ -30,6 +30,7 @@ describe("event schemas", () => {
       { ...envelope, type: "tool_result", toolCallId: "t1", name: "add", isError: false, text: "3" },
       usage,
       { ...envelope, type: "approval", subject: "jobs.submit EXP-001 on workstation", decision: "approved", by: "user" },
+      { ...envelope, type: "egress", agent: "a1", role: "coder", decision: "deny", target: "example.com:443", reason: "not on allowlist" },
     ];
     for (const e of events) expect(validate(EngineEvent, e)).toEqual({ ok: true, value: e });
   });
