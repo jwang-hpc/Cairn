@@ -171,6 +171,8 @@ export const EngineConfig = Type.Object(
       },
       strict,
     ),
+    /** Where research projects (one git repo each) live. Default: <engine home>/projects. */
+    projects_dir: Type.Optional(NonEmpty),
     /** Agent sandboxes (DR-0005). */
     agent: Type.Optional(
       Type.Object(

@@ -3,6 +3,7 @@ import { EFFORT_LEVELS, type EffortLevel, FORMAT_VERSION } from "@cairn/shared";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { ConfigError } from "./config/load.js";
+import { LEDGER_COMMANDS, LEDGER_OPTIONS, LEDGER_USAGE, runLedgerCommand } from "./ledger/commands.js";
 import { Engine, type LoginIo, type Status } from "./engine.js";
 import { type EnginePaths, REPO_ROOT, resolvePaths } from "./paths.js";
 import type { WorkerDeps } from "./worker/run.js";
@@ -38,6 +39,8 @@ commands:
   login <pi-provider> <oauth|api_key>   sign in or store an API key (run in your own terminal)
   help                                  show this message
 
+${LEDGER_USAGE}
+
 options:
   --version   print engine version
 
@@ -64,6 +67,7 @@ export async function runCli(argv: readonly string[], io: CliIo, deps: CliDeps =
         repo: { type: "string" },
         task: { type: "string" },
         keep: { type: "boolean" },
+        ...LEDGER_OPTIONS,
       },
       allowPositionals: true,
       strict: true,
@@ -84,7 +88,7 @@ export async function runCli(argv: readonly string[], io: CliIo, deps: CliDeps =
     io.out(USAGE);
     return 0;
   }
-  if (!["status", "ask", "run", "login"].includes(command)) {
+  if (![...["status", "ask", "run", "login"], ...LEDGER_COMMANDS].includes(command)) {
     io.err(`re: unknown command '${command}'`);
     io.err(USAGE);
     return 2;
@@ -100,6 +104,10 @@ export async function runCli(argv: readonly string[], io: CliIo, deps: CliDeps =
       return 1;
     }
     throw e;
+  }
+
+  if ((LEDGER_COMMANDS as readonly string[]).includes(command)) {
+    return runLedgerCommand(engine, command, rest, v, io, deps.env ?? process.env);
   }
 
   switch (command) {

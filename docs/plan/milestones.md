@@ -35,6 +35,8 @@ host services bound to all interfaces are reachable from agents (open question 1
 Create/open a project as an ARA artifact; PAPER.md manifest; hypotheses with falsification criteria;
 exploration tree with dead ends; provenance tags; decisions.md. Vendored ARA skills pinned.
 Acceptance: `re project new`, `re hypothesis add`, tree renders as text; every write tagged.
+**Status (2026-10-14): done** (M3.1–M3.3). `re ledger check`: 7 writes, 7 commits, all tagged
+(`scripts/acceptance-m3.sh`). ARA skills vendored at e52a925.
 
 ## M4 — Multi-model panel
 Modes: independent, critique, debate, relay, redteam, synthesis; blind labels; storage in engine/panels/.

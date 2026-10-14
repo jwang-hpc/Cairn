@@ -29,3 +29,16 @@ hand-editing YAML.
 - Needs: Overleaf Git integration (a paid Overleaf feature) or GitHub sync; an Overleaf git token stored on
   the host (Keychain, M8); a new network domain (`git.overleaf.com`) approved for the executor only.
 - Decide: git integration vs. GitHub sync; whether pulls are automatic or on request.
+
+## Skill and feature trials
+*Requested 2026-10-14.* Try new features and skills (e.g. Dong Dai's newest PiPilot skills,
+K-Dense-AI/scientific-agent-skills, K-Dense-AI/claude-scientific-writer) before they reach "production".
+- Recommendation: not long-lived git branches (they drift and can't A/B the same engine). Instead:
+  - **Skills:** vendor candidates pinned and unmodified under `skills/candidates/<source>@<commit>/` (license +
+    PROVENANCE, scanned for network/install instructions), **not loaded by default**. `config/skills.yaml`
+    enables a candidate per role, project, or run; the event log records the active skill set per run.
+    Promote to `third_party/` only when a with/without comparison on the same tasks (DR-0012 evals) and the
+    skill-usage counts justify it; otherwise delete.
+  - **Engine features:** keep short per-task branches; unfinished features behind config flags on `main`.
+  - **"Production":** tag releases (`v0.x`); the workstation's headless engine and the app run a tag.
+- Needs: user approval per source (new network fetch, licenses); after M3 so trials run against a ledger.

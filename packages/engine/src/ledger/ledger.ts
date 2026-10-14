@@ -1,7 +1,7 @@
 // Project ledger (DR-0007): one ARA artifact per git repository. Every write goes through this class, carries a
 // provenance tag, is appended to engine/ledger.jsonl, and is one git commit with a Cairn-Provenance trailer.
 // logic/claims.md is never written here: claims enter only through the claim gate (invariant 5, M6).
-import { appendFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import { AGENT_AUTHOR, git } from "@cairn/launcher";
 import {
@@ -115,14 +115,21 @@ export class Ledger {
     const dir = join(p.projectsDir, p.name);
     if (await stat(dir).then(() => true, () => false)) throw new LedgerError(`project already exists: ${dir}`);
     const created = araTimestamp(now());
-    for (const [file, content] of Object.entries(skeleton(p, created))) {
-      await mkdir(dirname(join(dir, file)), { recursive: true });
-      await writeFile(join(dir, file), content);
+    try {
+      for (const [file, content] of Object.entries(skeleton(p, created))) {
+        await mkdir(dirname(join(dir, file)), { recursive: true });
+        await writeFile(join(dir, file), content);
+      }
+      // No template: no sample hooks in project repos (engine-run git disables hooks anyway).
+      await git(dir, ["init", "--quiet", "-b", "main", "--template="]);
+      const ledger = new Ledger(dir, p.name, p.dataClass, now);
+      await ledger.#commit("create", "PAPER.md", undefined, "user", `create project ${p.name}: ${p.title}`, ["."]);
+      return ledger;
+    } catch (e) {
+      // Never leave a half-made project behind (a stray dir would also let git walk up to a parent repo).
+      await rm(dir, { recursive: true, force: true });
+      throw e;
     }
-    await git(dir, ["init", "--quiet", "-b", "main"]);
-    const ledger = new Ledger(dir, p.name, p.dataClass, now);
-    await ledger.#commit("create", "PAPER.md", undefined, "user", `create project ${p.name}: ${p.title}`, ["."]);
-    return ledger;
   }
 
   /** Open an existing project (must have been created by Cairn: PAPER.md front matter cairn_project). */
