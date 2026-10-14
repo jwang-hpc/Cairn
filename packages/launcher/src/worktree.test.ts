@@ -94,3 +94,18 @@ describe("removeWorktree", () => {
     await expect(git(base, ["status"])).rejects.toBeInstanceOf(WorktreeError);
   });
 });
+
+describe("commitWorktree", () => {
+  it("commits agent changes on agent/<id> under the agent identity, or nothing if unchanged", async () => {
+    const { commitWorktree } = await import("./worktree.js");
+    const ref = await createWorktree({ repo, agentId: "a1", root });
+    expect(await commitWorktree(ref, "agent a1: nothing")).toBeUndefined();
+    await writeFile(join(ref.path, "src", "new.py"), "Y = 2\n");
+    const sha = await commitWorktree(ref, "agent a1 (coder): add new.py");
+    expect(sha).toMatch(/^[0-9a-f]{40}$/);
+    expect((await git(repo, ["log", "-1", "--format=%an <%ae>|%s", "agent/a1"])).trim()).toBe("Cairn agent <agent@cairn.invalid>|agent a1 (coder): add new.py");
+    expect((await git(repo, ["diff", "--name-only", `${ref.base}...agent/a1`])).trim()).toBe("src/new.py");
+    // main is untouched
+    expect((await git(repo, ["rev-parse", "main"])).trim()).toBe(ref.base);
+  });
+});
