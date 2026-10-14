@@ -26,3 +26,4 @@ export {
   RuntimeError,
 } from "./runtime.js";
 export { type EgressDecision, EgressProxy, type EgressProxyOptions, isPublicAddress, matchAllowlist, normalizeHost } from "./egress.js";
+export { createWorktree, git, outsideAllowed, removeWorktree, type WorktreeChanges, worktreeDiff, WorktreeError, type WorktreeRef } from "./worktree.js";
