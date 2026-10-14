@@ -2,7 +2,7 @@
 // provenance tag, is appended to engine/ledger.jsonl, and is one git commit with a Cairn-Provenance trailer.
 // logic/claims.md is never written here: claims enter only through the claim gate (invariant 5, M6).
 import { appendFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, posix, relative } from "node:path";
 import { AGENT_AUTHOR, git } from "@cairn/launcher";
 import {
   type DataClass,
@@ -38,6 +38,8 @@ const DECISIONS = "engine/decisions.md";
 const LOG = "engine/ledger.jsonl";
 /** Reserved for the claim gate (invariant 5). */
 const CLAIM_GATED = new Set(["logic/claims.md"]);
+/** Where engine artifacts may be written via writeArtifacts(). */
+const ARTIFACT_AREAS = ["engine/panels/"];
 
 const pad = (n: number) => String(n).padStart(2, "0");
 /** ARA timestamp: local "YYYY-MM-DDTHH:MM". */
@@ -269,6 +271,33 @@ export class Ledger {
     const id = await this.#appendDecision(title, prov, refs, note);
     await this.#commit("add-decision", DECISIONS, id, prov, `decision ${id}: ${title}`);
     return id;
+  }
+
+  /** Read a project file (relative path). */
+  async read(rel: string): Promise<string> {
+    const p = posix.normalize(rel);
+    if (p.startsWith("..") || p.startsWith("/")) throw new LedgerError(`path outside the project: ${rel}`);
+    return readFile(join(this.dir, p), "utf8");
+  }
+
+  /**
+   * Engine artifacts (panel rounds, later requests and campaigns) under engine/<area>/. One tagged commit per call;
+   * paths outside the artifact areas are refused.
+   */
+  async writeArtifacts(files: { path: string; content: string }[], prov: Provenance, summary: string, op = "write-artifact"): Promise<void> {
+    this.#requireProvenance(prov);
+    if (files.length === 0) throw new LedgerError("nothing to write");
+    const paths: string[] = [];
+    for (const f of files) {
+      const p = posix.normalize(f.path);
+      if (p.split("/").includes("..") || !ARTIFACT_AREAS.some((a) => p.startsWith(a))) {
+        throw new LedgerError(`artifacts may only be written under ${ARTIFACT_AREAS.join(", ")}: ${f.path}`);
+      }
+      await mkdir(dirname(join(this.dir, p)), { recursive: true });
+      await writeFile(join(this.dir, p), f.content);
+      paths.push(p);
+    }
+    await this.#commit(op, paths[0]!, undefined, prov, summary, paths);
   }
 
   /** Verify every write is tagged: ledger.jsonl entries, git commits, tree nodes, hypotheses. */
