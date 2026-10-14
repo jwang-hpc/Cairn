@@ -1,0 +1,13 @@
+{
+  "name": "spike-pi-auth",
+  "private": true,
+  "type": "module",
+  "description": "M0 spike 1: pi-ai / pi-agent-core auth across providers. Throwaway.",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "1.2.0",
+    "@earendil-works/pi-ai": "1.2.0"
+  }
+}
