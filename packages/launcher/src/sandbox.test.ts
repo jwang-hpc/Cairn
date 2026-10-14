@@ -7,7 +7,7 @@ import { launchSandbox, PROXY_PORT } from "./sandbox.js";
 import { type CommandRunner, ContainerRuntime, type RunResult } from "./runtime.js";
 
 const ok = (stdout = "", code = 0): RunResult => ({ code, stdout, stderr: code ? "boom" : "", truncated: false, timedOut: false, durationMs: 1 });
-const netJson = JSON.stringify([{ configuration: { mode: "hostOnly" }, status: { ipv4Gateway: "192.168.130.1", ipv4Subnet: "192.168.130.0/24" } }]);
+const netJson = JSON.stringify([{ configuration: { mode: "hostOnly" }, status: { ipv4Gateway: "192.168.240.1", ipv4Subnet: "192.168.240.0/24" } }]);
 
 const roles: RolesConfig = {
   roles: {
@@ -65,8 +65,8 @@ describe("launchSandbox", () => {
         return { listen: async (host, port) => Object.assign(seen, { host, port }), close: async () => void (seen.closed = true) };
       },
     });
-    expect(seen).toMatchObject({ allow: ["pypi.org"], host: "192.168.130.1", port: PROXY_PORT });
-    expect(sb.spec.env.HTTPS_PROXY).toBe(`http://192.168.130.1:${PROXY_PORT}`);
+    expect(seen).toMatchObject({ allow: ["pypi.org"], host: "192.168.240.1", port: PROXY_PORT });
+    expect(sb.spec.env.HTTPS_PROXY).toBe(`http://192.168.240.1:${PROXY_PORT}`);
     await sb.close();
     expect(seen.closed).toBe(true);
   });

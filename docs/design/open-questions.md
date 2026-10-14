@@ -58,6 +58,9 @@
     **Changed (2026-10-14, post-M5):** the user re-enabled AirPlay Receiver (needed day to day), so 5000/7000 are
     reachable from agents again. Interim: AirPlay limited to the current user with a password. Turning services
     off doesn't scale to whatever runs on the Mac next; (b), the pf anchor, is the plan before M7.
+    **Decided (2026-10-14): (b).** Agent networks use a fixed pool and a static pf anchor lets each agent reach
+    only its own proxy (DR-0005 amendment, `scripts/pf-agents.sh`). Pending: install on the Mac and an escape run
+    with 4b passing; IPv6 measured by 4c.
 13. (New, M5) Workstation jobs and session lifetime. The workstation runner starts each job detached
     (`nohup`, own process group via perl `setpgrp`), so it should outlive the SSH channel that started it. If
     the workstation's systemd-logind has `KillUserProcesses=yes`, closing the ControlMaster (or `ControlPersist`

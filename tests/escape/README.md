@@ -16,7 +16,8 @@ pnpm test:escape          # or: corepack pnpm test:escape
 | 2 | Write rootfs, read-only mounts, `/skills`, new top-level dirs, another agent's worktree | all fail; host files unchanged |
 | 3 | Non-allowlisted domain via proxy; direct IP; DNS; proxy CONNECT to `127.0.0.1`/`localhost`/gateway | 403 + `egress` deny logged; no route; DNS fails in < 2 s |
 | 4 | Host loopback services and the executor via the gateway | unreachable |
-| 4b | Host ports bound to all interfaces | **measured, not asserted** (known exposure, see DR-0005 amendment) |
+| 4b | Host ports bound to all interfaces (a test service on `0.0.0.0`, AirPlay 5000/7000, ...) | unreachable: needs the pf guard, `sudo sh scripts/pf-agents.sh install` |
+| 4c | IPv6 from an agent to the host bridge | **measured, not asserted** (the pf guard is IPv4) |
 | 5 | Agent A reaches agent B's server | unreachable (separate networks) |
 | 6 | Executor without / with wrong token | 401, audited, token never logged |
 | 6b | Agent writes a job that breaks machine policy (`ssh`, reads a key, 99 nodes); plants a job script symlinked to a host secret; makes an experiment dir a symlink to the host home | all refused (read inside the agent's container, as jobs.submit does) before anything is stored; 3 audit entries; the secret never appears |
