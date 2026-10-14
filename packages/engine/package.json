@@ -1,0 +1,20 @@
+{
+  "name": "@cairn/engine",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Headless research engine: orchestrator, worker contract, ledger, budget governor, event log, CLI.",
+  "bin": {
+    "re": "./dist/bin.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "dependencies": {
+    "@cairn/shared": "workspace:*"
+  }
+}
