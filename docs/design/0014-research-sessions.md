@@ -62,10 +62,11 @@ Status: Proposed (2026-10-14). Needs the user's OK before it is built.
      shown only as an image, so no script in it runs. CSV tables are shown as tables.
    - **Paper:** the preview renders Markdown drafts. LaTeX and PDF builds come with the writer role.
 
-## Open (for the user)
-- **Autonomy:** may the orchestrator start read-only worker tasks (a literature search, an analysis that writes
-  nothing) without a click? Default: no, every launch is a click.
-- **Concurrency:** how many workers may run at once per project? Default: one, with the rest queued.
+## Decided (2026-10-14)
+- **Autonomy:** every worker launch is the user's click. The orchestrator starts nothing by itself, read-only tasks
+  included.
+- **Concurrency:** up to three delegated workers may run at once per project; any further launches wait in a queue.
+  Each worker has its own sandbox and branch.
 
 ## Plan
 This replaces the order of M8's remaining work.
