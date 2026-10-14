@@ -107,7 +107,16 @@ Same executor interface; thresholds may allow auto-approval for small jobs.
 
   The resolve tool appends the BibTeX entry and a line to `lit/resolutions.jsonl`. It does this inside the agent's
   sandbox, with no symlinks followed and append only. A different work with the same citekey gets a suffix. BibTeX
-  values are plain text: no backslashes or braces survive. `re literature check` re-verifies the file before a
-  branch is merged (M7.3); this amends DR-0007's "DOI/DBLP" to DOI or arXiv id.
+  values are plain text: no backslashes or braces survive. This amends DR-0007's "DOI/DBLP" to DOI or arXiv id.
+- **Into the ledger (M7.3):** `re literature check <branch>` reads the branch's `lit/` from git. It re-verifies
+  every `refs.bib` entry against the services: `resolutions.jsonl` is provenance only, since the agent can write it.
+  Each entry must look exactly like what resolve writes, with the same title, year, and first author as the record
+  it names. Every `[@key]` or `\cite{key}` in `lit/notes/` and `logic/related_work.md` must be in `refs.bib`.
+  Per-paper notes are `lit/notes/<citekey>.md`, with frontmatter `paper: doi:…|arxiv:…` and the sections from
+  DR-0009 (missing sections are a warning).
+- **Accept:** `re literature accept <branch>` runs the check, then writes the checked files as one ledger commit
+  tagged `ai-suggested(<model>, <effort>)`, taken from the run's usage record via the commit's `Cairn-Run` trailer.
+  It is refused if `lit/` changed in the project since the branch started, or if the branch deletes or symlinks
+  anything there. Agent branches are never merged with git: their commits carry no provenance trailer.
 - **Open:** queries go to four public APIs whatever the project's data class. They are short keyword strings, not
   project data, but whether `restricted` projects may use them is for the user to decide.

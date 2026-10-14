@@ -5,7 +5,13 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parseDocument } from "yaml";
 import { LIT_SOURCES, type LitSource, type PaperRecord, type Resolution } from "@cairn/executor";
+import { git, gitBlob } from "@cairn/launcher";
 import type { Engine } from "../engine.js";
+import { openCurrentProject } from "../ledger/commands.js";
+import type { Ledger } from "../ledger/ledger.js";
+import { provenance as prov } from "@cairn/shared";
+import { readUsage } from "../events/log.js";
+import { checkLiterature, type CheckReport, type LitFiles } from "./check.js";
 import { type LiteratureDeps, openLiteratureService, setLiteratureKey } from "./literature.js";
 
 export const LITERATURE_COMMANDS = ["literature"] as const;
@@ -25,7 +31,11 @@ export const LITERATURE_USAGE = `literature commands (Semantic Scholar, OpenAlex
                                            verify a citation and print its BibTeX (no BibTeX unless verified)
   literature contact [<email> | --clear]   the contact address sent to OpenAlex and Crossref (their "polite
                                            pool"; never sent to a model); stored in engine.yaml
-  literature key s2 [--clear]              store an optional Semantic Scholar API key (secrets folder, host only)`;
+  literature key s2 [--clear]              store an optional Semantic Scholar API key (secrets folder, host only)
+  literature check [<branch>]              before merging a branch: every lit/refs.bib entry re-verified, every
+                                           citation in lit/notes/ (and logic/related_work.md) in refs.bib
+  literature accept <branch>               check, then write that branch's lit/ into the ledger as one commit
+                                           tagged ai-suggested(<the run's model>, <effort>)`;
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -68,9 +78,10 @@ export async function runLiteratureCommand(
   v: Values,
   io: Io & { ask?: (q: string, secret: boolean) => Promise<string> },
   deps: LiteratureDeps = {},
+  env: NodeJS.ProcessEnv = process.env,
 ): Promise<number> {
   const [sub, value] = args;
-  if (!["contact", "search", "fetch", "resolve", "key"].includes(sub ?? "")) {
+  if (!["contact", "search", "fetch", "resolve", "key", "check", "accept"].includes(sub ?? "")) {
     io.err(`re literature: unknown subcommand '${sub ?? ""}'\n${LITERATURE_USAGE}`);
     return 2;
   }
@@ -114,6 +125,22 @@ export async function runLiteratureCommand(
       printResolution(r, io);
       return r.status === "resolved" ? 0 : 1;
     }
+    if (sub === "check" || sub === "accept") {
+      const ledger = await openCurrentProject(engine, v, env);
+      const rev = value ?? (sub === "check" ? "HEAD" : "");
+      if (!rev) throw new Error("usage: re literature accept <branch>");
+      const report = await checkLiterature(await litFiles(ledger, rev), await openLiteratureService(engine, deps));
+      printReport(report, `${ledger.name}@${rev}`, io);
+      if (!report.ok) {
+        if (sub === "accept") io.out("nothing accepted");
+        return 1;
+      }
+      if (sub === "check") return 0;
+      const done = await acceptLiterature(engine, ledger, rev, report);
+      io.out(done.files.length ? `accepted into ${ledger.name}: ${done.files.join(", ")} (${done.provenance})` : "nothing new to accept");
+      for (const s of done.skipped) io.err(`not accepted (check doesn't read it): ${s}`);
+      return 0;
+    }
     if (sub === "key") {
       if (value !== "s2") throw new Error("usage: re literature key s2 [--clear]");
       if (v.clear) {
@@ -141,4 +168,72 @@ export async function runLiteratureCommand(
     io.err(`re literature: ${(e as Error).message}`);
     return 1;
   }
+}
+
+const MAX_NOTES = 500;
+
+/** lit/ as committed at `rev` of the project (a branch an agent committed, or HEAD). */
+export async function litFiles(ledger: Ledger, rev: string): Promise<LitFiles> {
+  if (!/^[\w./-]{1,200}$/.test(rev) || rev.startsWith("-")) throw new Error(`not a branch or revision: ${rev}`);
+  const commit = (await git(ledger.dir, ["rev-parse", "--verify", "--end-of-options", `${rev}^{commit}`])).trim();
+  const read = (path: string) => gitBlob(ledger.dir, commit, path).then((b) => b.toString("utf8"), () => undefined);
+  const listed = (await git(ledger.dir, ["ls-tree", "-r", "--name-only", commit, "--", "lit/notes/"])).split("\n").filter((p) => p.endsWith(".md"));
+  if (listed.length > MAX_NOTES) throw new Error(`${listed.length} notes is more than check reads (${MAX_NOTES})`);
+  const notes: LitFiles["notes"] = [];
+  for (const path of [...listed, "logic/related_work.md"]) {
+    const text = await read(path);
+    if (text !== undefined) notes.push({ path, text });
+  }
+  const resolutions = await read("lit/resolutions.jsonl");
+  return { refs: (await read("lit/refs.bib")) ?? "", notes, ...(resolutions !== undefined ? { resolutions } : {}) };
+}
+
+function printReport(report: CheckReport, what: string, io: Io): void {
+  for (const i of report.items) (i.level === "fail" ? io.out : io.err)(`${i.level === "fail" ? "FAIL" : "warn"}  ${i.where}: ${i.message}`);
+  const failures = report.items.filter((i) => i.level === "fail").length;
+  io.out(`${report.ok ? "ok" : "FAILED"}: ${what}: ${report.references} references, ${report.citations} citations in ${report.notes} note files${report.ok ? "" : `, ${failures} failures`}`);
+}
+
+const MAX_FILE = 1 << 20;
+/** What `check` reads, and so all that `accept` copies. */
+const ACCEPTED = (p: string) => p === "lit/refs.bib" || p === "lit/resolutions.jsonl" || /^lit\/notes\/[^/]+\.md$/.test(p);
+
+/**
+ * Writes a checked branch's lit/ into the ledger: one commit tagged ai-suggested(<model>, <effort>) of the run that
+ * made the branch (from the event log, by the commit's Cairn-Run trailer). Refused when lit/ changed in the project
+ * since the branch started, or when the branch deletes or symlinks anything under lit/: accept only adds and updates.
+ */
+export async function acceptLiterature(engine: Engine, ledger: Ledger, rev: string, _report: CheckReport): Promise<{ files: string[]; skipped: string[]; provenance: string }> {
+  const commit = (await git(ledger.dir, ["rev-parse", "--verify", "--end-of-options", `${rev}^{commit}`])).trim();
+  const base = (await git(ledger.dir, ["merge-base", "HEAD", commit])).trim();
+  const moved = (await git(ledger.dir, ["diff", "--name-only", base, "HEAD", "--", "lit/"])).trim();
+  if (moved) throw new Error(`lit/ changed in ${ledger.name} since ${rev} started (${moved.split("\n").join(", ")}); run the literature task again from the current state`);
+  const deleted = (await git(ledger.dir, ["diff", "--name-only", "--diff-filter=D", base, commit, "--", "lit/"])).trim();
+  if (deleted) throw new Error(`${rev} deletes ${deleted.split("\n").join(", ")}; accept only adds and updates`);
+  const run = (await git(ledger.dir, ["log", "-1", "--format=%(trailers:key=Cairn-Run,valueonly)", commit])).trim();
+  const usage = run ? (await readUsage(engine.paths.home)).records.find((r) => r.run === run) : undefined;
+  if (!usage) throw new Error(`can't tell which model wrote ${rev}: ${run ? `no usage recorded for run ${run}` : "its last commit has no Cairn-Run trailer"}`);
+  const provenance = prov.aiSuggested(usage.model, usage.effort);
+
+  const files: { path: string; content: Buffer }[] = [];
+  const skipped: string[] = [];
+  const changed = (await git(ledger.dir, ["diff", "--name-only", "--diff-filter=AM", base, commit, "--", "lit/"])).split("\n").filter(Boolean);
+  const modes = new Map(
+    (await git(ledger.dir, ["ls-tree", "-r", commit, "--", "lit/"])).split("\n").filter(Boolean).map((l) => {
+      const [meta, path] = l.split("\t");
+      return [path!, meta!.split(" ")[0]!] as const;
+    }),
+  );
+  for (const path of changed) {
+    if (!ACCEPTED(path)) {
+      skipped.push(path);
+      continue;
+    }
+    if (modes.get(path) !== "100644" && modes.get(path) !== "100755") throw new Error(`${path} on ${rev} is not a regular file`);
+    const content = await gitBlob(ledger.dir, commit, path);
+    if (content.length > MAX_FILE) throw new Error(`${path} on ${rev} is larger than ${MAX_FILE} bytes`);
+    files.push({ path, content });
+  }
+  if (files.length) await ledger.writeArtifacts(files, provenance, `literature from ${rev} (re literature check passed)`, "literature");
+  return { files: files.map((f) => f.path), skipped, provenance };
 }
