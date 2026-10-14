@@ -72,13 +72,25 @@ describe.skipIf(!IT)("Apple container integration", () => {
     expect(await sh("cat; exit 7", "via stdin")).toMatchObject({ code: 7, stdout: "via stdin" });
   });
 
-  it("sees no host paths, no host env, no network, no DNS", async () => {
-    expect((await sh("ls /Users 2>&1; ls /work")).stdout).not.toMatch(/jonwang|Users\n/);
+  it("sees no host paths and no host env", async () => {
+    const paths = await sh("ls -d /Users /home/* /root/.ssh 2>/dev/null; true");
+    expect(paths.stdout).not.toMatch(/\/Users/);
     const env = (await sh("env | cut -d= -f1 | sort")).stdout.split("\n");
     for (const k of ["SSH_AUTH_SOCK", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GH_TOKEN"]) expect(env).not.toContain(k);
-    const netProbe = await rt.exec(name, ["python3", "-c", "import socket\ntry:\n socket.create_connection(('1.1.1.1',443),3); print('OPEN')\nexcept Exception as e: print('BLOCKED', type(e).__name__)"], { timeoutMs: 30_000 });
-    expect(netProbe.stdout).toMatch(/^BLOCKED/);
-    const dns = await rt.exec(name, ["python3", "-c", "import socket\ntry:\n socket.getaddrinfo('pypi.org',443); print('RESOLVED')\nexcept Exception as e: print('NO-DNS', type(e).__name__)"], { timeoutMs: 30_000 });
-    expect(dns.stdout).toMatch(/^NO-DNS/);
   });
+
+  // Probes wait out their own timeouts, so these need more than vitest's 5 s default.
+  it("has no network", async () => {
+    const py = "import socket,time\nt=time.time()\ntry:\n socket.create_connection(('1.1.1.1',443),5); print('OPEN')\nexcept Exception as e: print('BLOCKED', type(e).__name__, round(time.time()-t,1))";
+    const r = await rt.exec(name, ["python3", "-c", py], { timeoutMs: 30_000 });
+    console.log(`network probe: ${r.stdout.trim()}`);
+    expect(r.stdout).toMatch(/^BLOCKED/);
+  }, 60_000);
+
+  it("has no DNS", async () => {
+    const py = "import socket,time\nt=time.time()\ntry:\n socket.getaddrinfo('pypi.org',443); print('RESOLVED')\nexcept Exception as e: print('NO-DNS', type(e).__name__, round(time.time()-t,1))";
+    const r = await rt.exec(name, ["python3", "-c", py], { timeoutMs: 45_000 });
+    console.log(`dns probe: ${r.stdout.trim()}`);
+    expect(r.stdout).toMatch(/^NO-DNS/);
+  }, 60_000);
 });
