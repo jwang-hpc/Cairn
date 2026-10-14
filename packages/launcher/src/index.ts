@@ -25,3 +25,4 @@ export {
   type RunResult,
   RuntimeError,
 } from "./runtime.js";
+export { type EgressDecision, EgressProxy, type EgressProxyOptions, isPublicAddress, matchAllowlist, normalizeHost } from "./egress.js";

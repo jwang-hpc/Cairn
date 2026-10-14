@@ -102,7 +102,22 @@ export const ApprovalEvent = Type.Object(
   { additionalProperties: false },
 );
 
-export const EngineEvent = Type.Union([MessageEvent, ToolCallEvent, ToolResultEvent, UsageEvent, ApprovalEvent]);
+/** One decision of an agent's egress proxy (DR-0005: every network attempt is logged). */
+export const EgressEvent = Type.Object(
+  {
+    ...envelope,
+    type: Type.Literal("egress"),
+    agent: NonEmpty,
+    role: NonEmpty,
+    decision: Type.Union([Type.Literal("allow"), Type.Literal("deny")]),
+    /** What the agent asked for, e.g. "pypi.org:443" or "GET http://example.com/". */
+    target: Type.String(),
+    reason: Type.String(),
+  },
+  { additionalProperties: false },
+);
+
+export const EngineEvent = Type.Union([MessageEvent, ToolCallEvent, ToolResultEvent, UsageEvent, ApprovalEvent, EgressEvent]);
 
 export type MessageEvent = Type.Static<typeof MessageEvent>;
 export type ToolCallEvent = Type.Static<typeof ToolCallEvent>;
@@ -110,5 +125,6 @@ export type ToolResultEvent = Type.Static<typeof ToolResultEvent>;
 export type Tokens = Type.Static<typeof Tokens>;
 export type UsageEvent = Type.Static<typeof UsageEvent>;
 export type ApprovalEvent = Type.Static<typeof ApprovalEvent>;
+export type EgressEvent = Type.Static<typeof EgressEvent>;
 export type EngineEvent = Type.Static<typeof EngineEvent>;
 export type EventType = EngineEvent["type"];
