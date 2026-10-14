@@ -85,8 +85,8 @@ the app assuming it (the CLI already does; DR-0013 amendment).
 ## Paper library across projects (Zotero)
 *Requested and designed 2026-10-14.* Papers found in one project stay in that project, and the literature agent
 re-finds them every time. The user's Zotero library becomes the shared library. Zotero is already the user's paper
-manager (metadata synced by Zotero, PDFs on the user's WebDAV with local copies in Zotero desktop), so Cairn adds
-no store of its own. PiPilot's Paper Wiki (RFC-003) informed what is shared and how papers are identified (DOI,
+manager (Zotero 10, metadata synced by Zotero, PDFs on the user's WebDAV with local copies in Zotero desktop), so
+Cairn adds no store of its own. PiPilot's Paper Wiki (RFC-003) informed what is shared and how papers are identified (DOI,
 then arXiv id, then title and year).
 
 **Who does what.** Agents never touch Zotero; only the Cairn engine on the user's Mac does.
@@ -131,5 +131,31 @@ then arXiv id, then title and year).
 
   No new dependency is needed: plain HTTP with fetch. The Web API (`api.zotero.org`, a new domain) is needed only
   for reading without Zotero desktop, e.g. a headless workstation.
+- **The same paper in several projects** (e.g. HPC I/O and compression projects citing SZ3):
+  - **One paper, one Zotero item.** Before creating anything, Cairn looks the paper up by DOI or arXiv id. If the
+    item exists, Cairn adds it to the second project's subcollection; a Zotero item can sit in many collections.
+    Cairn keeps its own map in the engine home: id → item key, note key, and the hash of the note it wrote. It can
+    be rebuilt from the `cairn` tag and the citation keys.
+  - **One citekey everywhere.** The `Citation Key` in Zotero is library-wide. `literature.resolve` asks the library
+    first and reuses that key, so SZ3 is `liang2023sz3` in every project. A clash suffix (`a`, `b`) is assigned
+    once, library-wide, when the item is created, not per project.
+  - **One paper-level note, reused.** `literature.library` shows the agent the existing Cairn note, so a second
+    project extends it instead of re-reading the paper. When a new note differs, Cairn never overwrites silently.
+    At accept time the user sees the difference and chooses: keep, replace, or keep both. Replacing is suggested
+    only when the new note rests on more (full text over abstract). A note the user has edited since Cairn wrote
+    it is never replaced; the new one is added beside it.
+  - **Per-project parts never conflict.** Relevance scores and syntheses live in each project, so the same paper can
+    score 9 in one project and 5 in another.
+  - **The project ledger stays the record.** Each project keeps its own `refs.bib` and notes (DR-0007) and can be
+    rebuilt without Zotero; Zotero is the shared hub. A user's later fix to a Zotero item doesn't silently change
+    a project's `refs.bib`. `re literature check` flags vouched entries whose item changed.
+  - **Duplicates already in the library:**
+    - Two items with the same DOI: Cairn uses the earliest one and tells the user to merge them in Zotero
+      ("Duplicate Items"). Cairn never merges or deletes them itself.
+    - A preprint and its published version: different ids, so different works for citation. Cairn cites the
+      published version (the skill's rule) and records the arXiv id beside it.
+  - **Two projects accepting at once:** Zotero writes go through one engine lock, and the lookup and the create
+    happen inside it, so the second accept finds the item the first one created. Note updates carry version
+    preconditions, so a concurrent edit can't be lost.
 - **Decide:** whether search may use Zotero's indexed full text (it would show agents text from the user's PDFs).
 
