@@ -23,3 +23,11 @@ pi-mono packages moved from `@mariozechner/*` (0.70.x, used by PiPilot) to `@ear
 Code borrowed from PiPilot must be ported to the new package names/APIs. pi-mono now ships `pi-mcp`
 (standalone MCP client), which implements seam 4 of DR-0004 without a custom adapter. `pi-durable`
 (experimental, crash-resumable harness) and `pi-evals` are worth evaluating for DR-0011 and DR-0012.
+
+## Amendment (2026-10-14): M0 results
+- **Isolation: Apple `container` only.** Verified with Apple `container` 1.5.0 on macOS 26.6.2 (spike 3).
+  The Docker fallback is dropped by user decision (open question 1), so agents run only on macOS 26 hosts.
+  Campaigns on the Linux workstation are deterministic code (DR-0011) and need no agent containers.
+- **Agent runtime confirmed:** `@earendil-works/pi-ai`, `pi-agent-core`, and `pi-mcp` at 1.2.0 (spikes 1, 2).
+- **Toolchain:** pnpm 10.34.6 (pnpm 12 can't be launched by Node 24.5's bundled corepack and downloads a
+  native binary at runtime), TypeScript 7.0.2, vitest 5.0.2, all pinned exactly.

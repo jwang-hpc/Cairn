@@ -23,3 +23,18 @@ Usage-limit errors are surfaced as actionable messages and not retried blindly (
 See DR-0013. Anthropic and OpenAI may use subscription OAuth; Google and Microsoft are API-key billed.
 Provider-side budgets (e.g., Google Cloud, Azure) often alert rather than hard-stop, so the local budget
 governor is the enforcement point. Per-provider daily quotas are added to per-machine and per-role quotas.
+
+## Amendment (2026-10-14): M0 and M1 results
+- **Subscription routes verified (spike 1):** Claude Team seat via pi-ai `anthropic` OAuth, and ChatGPT
+  Plus via pi-ai `openai-codex`. Both present themselves as the vendor's CLI (Claude: Claude Code's OAuth
+  client, `claude-cli` user-agent, Claude Code beta flags, and a "You are Claude Code…" system prompt;
+  OpenAI: the Codex CLI's OAuth client). The Team owner accepted this on 2026-10-13. "Sign in with
+  ChatGPT" (`openai` provider, api.openai.com) returns HTTP 520 for this account and is not used.
+- **API-key fallback:** one `engine-mbp` Claude workspace and one `engine-mbp` OpenAI project, with monthly
+  caps set by the user (Claude $200, OpenAI $100). Layer 1 is in place for this machine.
+- **Layer 2 (M1.5):** subscription calls carry only a notional list-price cost, so they are capped in
+  tokens; API-key calls are capped in USD. Daily caps per provider, total, and role; per-run caps on
+  turns, tokens, and billed USD.
+- **Credentials:** stored in the engine home (files, 0600) until the Keychain/safeStorage store in M8.
+  Logins need a loopback callback port, so they run on the host (`re login`), never in a sandbox; the
+  ChatGPT and Codex flows also need a stable per-install device id.
