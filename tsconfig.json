@@ -8,6 +8,9 @@
       "path": "packages/launcher"
     },
     {
+      "path": "packages/executor"
+    },
+    {
       "path": "packages/engine"
     }
   ]

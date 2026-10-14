@@ -11,7 +11,8 @@
     "typecheck": "tsc -b && tsc -p tsconfig.check.json",
     "test": "vitest run",
     "clean": "tsc -b --clean",
-    "re": "node packages/engine/dist/bin.js"
+    "re": "node packages/engine/dist/bin.js",
+    "test:escape": "tsc -b && CAIRN_ESCAPE=1 vitest run --config tests/escape/vitest.config.ts"
   },
   "devDependencies": {
     "@types/node": "24.19.0",
