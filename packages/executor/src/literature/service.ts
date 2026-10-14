@@ -2,7 +2,7 @@
 // inside it (every model call stays in the agent loop and the event log, invariant 6). Results are external,
 // untrusted metadata.
 import { type LitHttp, LitError } from "./net.js";
-import { arxivFromDoi, citekey, type LitSource, LIT_SOURCES, mergeRecords, normArxiv, normDoi, type PaperRecord, titleSimilarity, toBibtex } from "./records.js";
+import { arxivFromDoi, citekey, type LitSource, LIT_SOURCES, mergeRecords, normArxiv, normDoi, type PaperRecord, samePaper, surname, titleSimilarity, toBibtex } from "./records.js";
 import { arxiv, crossref, doiRegistered, openAlex, type SearchOptions, semanticScholar } from "./sources.js";
 
 export interface SourceStatus {
@@ -53,7 +53,6 @@ export function parsePaperId(s: string): { doi?: string; arxiv?: string; s2?: st
   throw new LitError(`not a paper id: ${s} (use doi:…, arxiv:…, s2:…, openalex:W…)`, "not_found");
 }
 
-const surname = (a: string) => (a.includes(",") ? a.split(",")[0]! : (a.trim().split(/\s+/).at(-1) ?? a)).normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 
 export class LiteratureService {
   readonly #s2;
@@ -127,6 +126,11 @@ export class LiteratureService {
    * or arXiv; an arXiv id must exist on arXiv; a title must match exactly one paper closely (title similarity ≥ 0.9,
    * same year and first author when given), which is then resolved by its DOI or arXiv id. Anything less is
    * inconclusive: no BibTeX, so it can't be cited.
+   *
+   * A preprint and its published version are one reference: the published version, with the arXiv id kept as its
+   * eprint. An arXiv id whose record names a registered journal DOI resolves to that publication; a DOI whose
+   * publisher names an arXiv preprint keeps it once arXiv confirms it. Unless they differ substantially (title or
+   * first author, see samePaper), in which case each is cited as itself.
    */
   async resolve(input: ResolveInput): Promise<Resolution> {
     const checks: string[] = [];
@@ -139,8 +143,18 @@ export class LiteratureService {
       const record = ax ? await this.#ax.paper(ax) : ((await this.#cr.work(doi).catch(() => undefined)) ?? (await this.#oa.work({ doi }).catch(() => undefined)));
       if (!record) return { status: "inconclusive", checks: [...checks, "registered, but neither Crossref nor OpenAlex describes it"] };
       checks.push(`metadata from ${record.sources.join(", ")}`);
-      // An arXiv DOI keeps whatever journal DOI arXiv lists; any other DOI is the one just verified.
-      return this.#resolved(ax ? record : { ...record, ids: { ...record.ids, doi } }, checks);
+      // An arXiv DOI resolves as the arXiv id (and so to its publication, if any).
+      if (ax) return this.resolve({ arxiv: ax }).then((r) => ({ ...r, checks: [...checks, ...r.checks] }));
+      const published: PaperRecord = { ...record, ids: { ...record.ids, doi } };
+      if (published.ids.arxiv) {
+        const pre = await this.#ax.paper(published.ids.arxiv).catch(() => undefined);
+        if (pre && samePaper(pre, published)) checks.push(`its preprint arXiv:${published.ids.arxiv} exists and is the same paper (kept as eprint)`);
+        else {
+          checks.push(`the publisher names preprint arXiv:${published.ids.arxiv}, but ${pre ? "it differs substantially" : "arXiv doesn't confirm it"}: not linked`);
+          delete published.ids.arxiv;
+        }
+      }
+      return this.#resolved(published, checks);
     }
     if ("arxiv" in input) {
       const a = normArxiv(input.arxiv);
@@ -148,9 +162,17 @@ export class LiteratureService {
       const record = await this.#ax.paper(a);
       if (!record) return { status: "not_found", checks: [`arXiv has no ${a}`] };
       checks.push(`arXiv: ${a} exists`);
-      if (record.ids.doi && !arxivFromDoi(record.ids.doi)) {
-        if (await doiRegistered(this.http, record.ids.doi)) checks.push(`its journal DOI ${record.ids.doi} is registered`);
-        else record.ids = { arxiv: a };
+      const journal = record.ids.doi && !arxivFromDoi(record.ids.doi) ? record.ids.doi : undefined;
+      if (journal) {
+        if (await doiRegistered(this.http, journal)) {
+          const published = (await this.#cr.work(journal).catch(() => undefined)) ?? (await this.#oa.work({ doi: journal }).catch(() => undefined));
+          if (published && samePaper(record, published)) {
+            checks.push(`published as ${journal} (registered; metadata from ${published.sources.join(", ")}): cited as the publication, with the preprint as its eprint`);
+            return this.#resolved({ ...published, ids: { ...published.ids, doi: journal, arxiv: a }, sources: [...new Set([...published.sources, ...record.sources])] }, checks);
+          }
+          checks.push(`arXiv names ${journal}, but ${published ? "it differs substantially (title or first author)" : "no source describes it"}: cited as the preprint`);
+        } else checks.push(`arXiv names ${journal}, which is not registered: cited as the preprint`);
+        record.ids = { arxiv: a };
       }
       return this.#resolved(record, checks);
     }

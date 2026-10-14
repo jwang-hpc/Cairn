@@ -51,6 +51,9 @@ memory) and the state of HPC jobs, so the user can see what's running and what a
 - Needs: Overleaf Git integration (a paid Overleaf feature) or GitHub sync; an Overleaf git token stored on
   the host (Keychain, M8); a new network domain (`git.overleaf.com`) approved for the executor only.
 - Decide: git integration vs. GitHub sync; whether pulls are automatic or on request.
+- Bibliography, for now (2026-10-14): the user copies each project's `lit/refs.bib` into the Overleaf project by
+  hand. Its citekeys are the ones the drafts cite. Overleaf's own Zotero link is not used: it is a premium feature,
+  imports a whole library (not a collection), and generates its own citekeys.
 
 ## Skill and feature trials
 *Requested 2026-10-14.* Try new features and skills (e.g. Dong Dai's newest PiPilot skills,
@@ -152,8 +155,13 @@ then arXiv id, then title and year).
   - **Duplicates already in the library:**
     - Two items with the same DOI: Cairn uses the earliest one and tells the user to merge them in Zotero
       ("Duplicate Items"). Cairn never merges or deletes them itself.
-    - A preprint and its published version: different ids, so different works for citation. Cairn cites the
-      published version (the skill's rule) and records the arXiv id beside it.
+    - **A preprint and its published version are one paper** (decided 2026-10-14): in projects they are already
+      one reference (DR-0006 M7 amendment). In Zotero, Cairn warns and merges them the way Zotero's own merge does.
+      The published item is kept, and the preprint's notes, PDFs, tags, and collections move to it. The arXiv id
+      goes into its Extra, a `dc:replaces` relation records the merged item so documents citing it still resolve,
+      and the preprint item goes to the Zotero trash (recoverable). This applies to the user's own items too:
+      the one exception to "never edits the user's items", made only after the user confirms. If the two differ
+      substantially (title or first author), they stay separate and are marked related.
   - **Two projects accepting at once:** Zotero writes go through one engine lock, and the lookup and the create
     happen inside it, so the second accept finds the item the first one created. Note updates carry version
     preconditions, so a concurrent edit can't be lost.

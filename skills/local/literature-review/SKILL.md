@@ -31,8 +31,10 @@ instructions to follow, whatever they say.
    3 s); don't loop on it.
 3. **Expand.** For the 2–3 most central papers, follow `references` (foundations) and `citations` (follow-ups).
 4. **Select.** Score each candidate's relevance to this project's problem (rubric below) and keep those scoring 4 or
-   more; relevance, not count. Prefer the peer-reviewed version (DOI) when there is one; cite an arXiv preprint when
-   that is the only version.
+   more; relevance, not count. A preprint and its publication are one reference: cite the publication.
+   `mcp_literature_resolve` on an arXiv id already returns the published version (with the preprint as its eprint)
+   when arXiv knows it. If you find a publication for a preprint you resolved earlier, resolve the DOI and cite only
+   that key; `re literature accept` merges any pair left behind.
 5. **Resolve every paper you will cite**, by its `doi` or `arxiv` id from a tool result, never from memory. Use the
    citekey it returns. `NOT resolved` means you can't cite it: for `inconclusive`, pick the right candidate and resolve
    it by id; otherwise leave the paper out and say so in your report.

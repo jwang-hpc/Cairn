@@ -10,10 +10,19 @@ import type { LoadedConfig } from "../config/load.js";
 import { Engine } from "../engine.js";
 import { envelope } from "../events/log.js";
 import { Ledger } from "../ledger/ledger.js";
-import { checkLiterature, citationsIn, paperNotes, parseBibtex } from "./check.js";
+import { checkLiterature, citationsIn, mergePreprints, paperNotes, parseBibtex } from "./check.js";
 
 const SZ3 = "10.1109/tbdata.2022.3201176";
+const TOPOSZ_DOI = "10.1109/tvcg.2023.1234";
 const CROSSREF: Record<string, unknown> = {
+  [TOPOSZ_DOI]: {
+    DOI: TOPOSZ_DOI,
+    title: ["TopoSZ: Preserving Topology in Error-Bounded Lossy Compression"],
+    author: [{ given: "Lin", family: "Yan" }],
+    issued: { "date-parts": [[2023]] },
+    "container-title": ["IEEE TBD"],
+    type: "journal-article",
+  },
   [SZ3]: {
     DOI: SZ3,
     title: ["SZ3: A Modular Framework for Composing Prediction-Based Error-Bounded Lossy Compressors"],
@@ -104,6 +113,29 @@ describe("checkLiterature (re-verifies, never trusts the log)", () => {
     expect(f).toMatch(/noid2023: field note is not one literature\.resolve writes; neither a doi nor an arXiv eprint/);
     expect(f).toMatch(/lit\/notes\/x\.md: cites ghost2020, which is not in lit\/refs\.bib/);
     expect(r.items.filter((i) => i.level === "warn").map((i) => i.message)).toContain("verified, but not in lit/resolutions.jsonl (not added through literature.resolve)");
+  });
+
+  it("a preprint and its publication in one refs.bib are flagged, and merged into the publication", async () => {
+    // TopoSZ's arXiv entry, and a "published" TopoSZ with the same title and first author.
+    const PUB: PaperRecord = { ids: { doi: TOPOSZ_DOI }, title: TOPOSZ_RECORD.title, authors: ["Yan, Lin"], year: 2023, kind: "journal-article", venue: "IEEE TBD", sources: ["crossref"] };
+    const pubBib = toBibtex(PUB, "yan2023topopub");
+    const refs = `${toBibtex(TOPOSZ_RECORD, citekey(TOPOSZ_RECORD))}\n${pubBib}`;
+    const notes = [
+      { path: "lit/notes/yan2023toposz.md", text: "---\npaper: arxiv:2304.11768\nrelevance: 7\n---\n# TopoSZ [@yan2023toposz]\n" },
+      { path: "lit/notes/related-work.md", text: "Topology [@yan2023toposz; @other2020] and \\cite{a,yan2023toposz}. Not [@yan2023toposzx].\n" },
+    ];
+    const pairs = (await checkLiterature({ refs, notes, resolutions: "" }, lit())).items.filter((i) => /arXiv preprint/.test(i.message));
+    expect(pairs.map((i) => i.message)).toEqual(["the arXiv preprint of yan2023topopub (same paper): cite yan2023topopub; re literature accept merges them"]);
+    const m = mergePreprints({ refs, notes, resolutions: "" }, new Date("2026-10-14T00:00:00Z"));
+    expect(m.merges).toEqual([{ from: "yan2023toposz", into: "yan2023topopub", citations: 3, note: "renamed" }]);
+    expect(m.removed).toEqual(["lit/notes/yan2023toposz.md"]);
+    const bib = parseBibtex(m.files.refs);
+    expect(bib.errors).toEqual([]);
+    expect(bib.entries.map((e) => [e.key, e.fields.doi, e.fields.eprint])).toEqual([["yan2023topopub", TOPOSZ_DOI, "2304.11768"]]);
+    expect(m.files.notes.map((n) => n.path)).toEqual(["lit/notes/yan2023topopub.md", "lit/notes/related-work.md"]);
+    expect(m.files.notes[0]!.text).toContain(`paper: doi:${TOPOSZ_DOI}\n`);
+    expect(m.files.notes[1]!.text).toBe("Topology [@yan2023topopub; @other2020] and \\cite{a,yan2023topopub}. Not [@yan2023toposzx].\n");
+    expect(m.files.resolutions).toBe('{"at":"2026-10-14T00:00:00.000Z","merged":"yan2023toposz","into":"yan2023topopub","by":"re literature accept"}\n');
   });
 
   it("paper notes carry a 0-10 relevance score: missing is a warning, malformed a failure", async () => {
@@ -241,6 +273,7 @@ describe("re literature check <branch>", () => {
       "lit/resolutions.jsonl": LOG,
       "lit/notes/liang2023sz3.md": note(`doi:${SZ3}`),
       "lit/notes/related-work.md": "SZ3 [@liang2023sz3]; TopoSZ [@yan2023toposz].\n",
+      "lit/notes/yan2023toposz.md": note("arxiv:2304.11768"),
       "lit/scratch.txt": "not read by check\n",
     };
     await agentBranch(dir, "agent/lit-bad", { ...good, "lit/notes/related-work.md": "[@ghost2020]\n" });
@@ -248,10 +281,26 @@ describe("re literature check <branch>", () => {
     await agentBranch(dir, "agent/lit-good", good);
     const r = await re("literature", "accept", "agent/lit-good");
     expect(r.code).toBe(0);
-    expect(r.out).toMatch(/accepted into demo: lit\/notes\/liang2023sz3\.md, lit\/notes\/related-work\.md, lit\/refs\.bib, lit\/resolutions\.jsonl \(ai-suggested\(claude-opus-5-5, high\)\)$/m);
+    expect(r.out).toMatch(/accepted into demo: lit\/refs\.bib, lit\/resolutions\.jsonl, lit\/notes\/liang2023sz3\.md, lit\/notes\/related-work\.md, lit\/notes\/yan2023toposz\.md \(ai-suggested\(claude-opus-5-5, high\)\)$/m);
     expect(r.err).toContain("not accepted (check doesn't read it): lit/scratch.txt");
     expect(await readFile(join(dir, "lit", "refs.bib"), "utf8")).toBe(GOOD_BIB);
     expect(await git(dir, ["log", "-1", "--format=%(trailers:key=Cairn-Provenance,valueonly)"])).toMatch(/ai-suggested\(claude-opus-5-5, high\)/);
+    expect(await re("ledger", "check")).toMatchObject({ code: 0 });
+    // A preprint accepted earlier, and later its publication: accept merges them, removing the old note.
+    await appendFile(join(engine.paths.home, "usage.jsonl"), `${usage("run-lit-2")}\n`);
+    const PUB: PaperRecord = { ids: { doi: TOPOSZ_DOI }, title: TOPOSZ_RECORD.title, authors: ["Yan, Lin"], year: 2023, kind: "journal-article", venue: "IEEE TBD", sources: ["crossref"] };
+    await agentBranch(dir, "agent/lit-pub", {
+      "lit/refs.bib": `${GOOD_BIB}\n${toBibtex(PUB, "yan2023topopub")}`,
+      "lit/notes/related-work.md": "SZ3 [@liang2023sz3]; TopoSZ [@yan2023toposz]; published [@yan2023topopub].\n",
+    }, "run-lit-2");
+    const merged = await re("literature", "accept", "agent/lit-pub");
+    expect(merged.code).toBe(0);
+    expect(merged.out).toMatch(/^merge {2}yan2023toposz \(arXiv preprint\) into yan2023topopub \(published\): 1 citations rewritten, its note is now lit\/notes\/yan2023topopub\.md$/m);
+    expect(merged.out).toMatch(/-lit\/notes\/yan2023toposz\.md/);
+    expect(await readFile(join(dir, "lit", "notes", "yan2023topopub.md"), "utf8")).toContain(`paper: doi:${TOPOSZ_DOI}`);
+    expect(await readFile(join(dir, "lit", "notes", "related-work.md"), "utf8")).toBe("SZ3 [@liang2023sz3]; TopoSZ [@yan2023topopub]; published [@yan2023topopub].\n");
+    expect(parseBibtex(await readFile(join(dir, "lit", "refs.bib"), "utf8")).entries.map((e) => e.key)).toEqual(["liang2023sz3", "yan2023topopub"]);
+    await expect(readFile(join(dir, "lit", "notes", "yan2023toposz.md"), "utf8")).rejects.toThrow();
     expect(await re("ledger", "check")).toMatchObject({ code: 0 });
     // A second branch that started before that accept is refused: lit/ moved under it.
     await git(dir, ["branch", "agent/lit-stale", "agent/lit-good~0"]);

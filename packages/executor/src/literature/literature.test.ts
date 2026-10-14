@@ -87,6 +87,14 @@ describe("records", () => {
     expect(arxivQuery('"error-bounded" AND (lossy) OR x')).toBe("all:error-bounded AND all:lossy");
   });
 
+  it("joins a Crossref title and subtitle (ACM splits them)", () => {
+    const acm = { DOI: "10.1145/3410463.3414624", title: ["cuSZ"], subtitle: ["An Efficient GPU-Based Error-Bounded Lossy Compression Framework for Scientific Data"], type: "proceedings-article" };
+    expect(fromCrossref(acm)?.title).toBe("cuSZ: An Efficient GPU-Based Error-Bounded Lossy Compression Framework for Scientific Data");
+    expect(fromCrossref({ ...acm, title: ["cuSZ: An Efficient GPU-Based Error-Bounded Lossy Compression Framework for Scientific Data"] })?.title).toBe(
+      "cuSZ: An Efficient GPU-Based Error-Bounded Lossy Compression Framework for Scientific Data",
+    );
+  });
+
   it("merges the same work from several sources", () => {
     const a = fromCrossref(CROSSREF_SZ3)!;
     const b: PaperRecord = { ids: { doi: SZ3_DOI, openalex: "W1" }, title: a.title, authors: [], abstract: "longer abstract", citations: 5, sources: ["openalex"] };
@@ -217,6 +225,45 @@ describe("resolve (citations must be verifiable)", () => {
     expect(amb.bibtex).toBeUndefined();
     expect(amb.candidates).toHaveLength(2);
     expect((await svc.resolve({ title: "short" })).status).toBe("not_found");
+  });
+
+  it("a preprint and its publication are one reference: the publication, with the arXiv id as eprint", async () => {
+    const atom = (id: string, title: string, doi?: string) =>
+      `<feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom"><entry><id>http://arxiv.org/abs/${id}v1</id><title>${title}</title><published>2022-08-01T00:00:00Z</published><author><name>Xin Liang</name></author>${doi ? `<arxiv:doi>${doi}</arxiv:doi>` : ""}</entry></feed>`;
+    const feeds: Record<string, string> = {
+      "2208.00001": atom("2208.00001", "SZ3: A Modular Framework for Composing Prediction-Based Error-Bounded Lossy Compressors", "10.1109/TBDATA.2022.3201176"),
+      "2208.00002": atom("2208.00002", "An Early Prediction Framework for Lossy Compression", "10.1109/TBDATA.2022.3201176"),
+    };
+    const PUBLISHED = { ...CROSSREF_SZ3, DOI: "10.1109/pub.2024.1", relation: { "has-preprint": [{ "id-type": "doi", id: "10.48550/arXiv.2208.00001" }] } };
+    const STALE = { ...CROSSREF_SZ3, DOI: "10.1109/pub.2024.2", relation: { "has-preprint": [{ "id-type": "doi", id: "10.48550/arXiv.2208.09999" }] } };
+    const svc = new LiteratureService(
+      new LitHttp({
+        // Specific routes first: the first matching prefix answers.
+        fetch: fakeFetch({
+          "doi.org/api/handles/10.1109/pub.2024": () => okJson({ responseCode: 1 }),
+          "doi.org/api/handles/10.1109/tbdata.2022.3201176": () => okJson({ responseCode: 1 }),
+          "doi.org/api/handles/": () => new Response(JSON.stringify({ responseCode: 100 }), { status: 404 }),
+          "api.crossref.org/works/10.1109/tbdata.2022.3201176": () => okJson({ message: CROSSREF_SZ3 }),
+          "api.crossref.org/works/10.1109/pub.2024.1": () => okJson({ message: PUBLISHED }),
+          "api.crossref.org/works/10.1109/pub.2024.2": () => okJson({ message: STALE }),
+          "export.arxiv.org/api/query": (u) => new Response(feeds[u.searchParams.get("id_list") ?? ""] ?? "<feed></feed>"),
+        }).f,
+        sleep: noSleep,
+      }),
+    );
+    const pre = await svc.resolve({ arxiv: "arXiv:2208.00001v2" });
+    expect(pre).toMatchObject({ status: "resolved", citekey: "liang2023sz3", record: { ids: { doi: SZ3_DOI, arxiv: "2208.00001" }, venue: "IEEE Transactions on Big Data" } });
+    expect(pre.checks.at(-1)).toMatch(/^published as 10\.1109\/tbdata\.2022\.3201176 .*cited as the publication, with the preprint as its eprint$/);
+    expect(pre.bibtex).toMatch(/^@article\{liang2023sz3,[\s\S]*doi = \{10\.1109\/tbdata\.2022\.3201176\}[\s\S]*eprint = \{2208\.00001\}/);
+    // Substantially different (title): each is cited as itself.
+    const other = await svc.resolve({ arxiv: "2208.00002" });
+    expect(other.record?.ids).toEqual({ arxiv: "2208.00002" });
+    expect(other.checks.at(-1)).toMatch(/differs substantially .*cited as the preprint$/);
+    // A publisher-named preprint is kept only when arXiv confirms it.
+    expect((await svc.resolve({ doi: "10.1109/pub.2024.1" })).record?.ids).toEqual({ doi: "10.1109/pub.2024.1", arxiv: "2208.00001" });
+    const stale = await svc.resolve({ doi: "10.1109/pub.2024.2" });
+    expect(stale.record?.ids).toEqual({ doi: "10.1109/pub.2024.2" });
+    expect(stale.checks.at(-1)).toMatch(/arXiv doesn't confirm it: not linked$/);
   });
 
   it("LitError kinds are stable for callers", () => {
