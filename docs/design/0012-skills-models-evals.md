@@ -25,3 +25,12 @@ work set; catch a planted bug in an experiment script; interpret a result table 
 reject an "idea" that is already published; build and run a known compressor configuration.
 Run on every model or worker change; promote only where it wins; keep the false-positive gate fixed.
 Re-test skills with and without new model capabilities; delete scaffolding that no longer helps.
+
+## Amendment (2026-10-14): ARA skills vendored
+`skills/third_party/ara@e52a925/`: research-manager 2.6.0, rigor-reviewer 3.1.0, research-fuzzer — pinned at
+upstream commit e52a925 (2026-08-24), MIT, byte-identical, with per-file sha256 in PROVENANCE.md. Upstream's
+one-line setup (an agent fetching and following a remote prompt) is not used (invariant 7). research-manager
+assumes the artifact lives under `ara/`; Cairn projects are the ARA root (DR-0007), to be bridged by a
+local override when agents use the skill. Cairn's ledger follows research-manager's schemas, with two
+DR-0007 extensions: `logic/hypotheses.md` (IDs `HY01…`, since ARA's `H` prefix means heuristics) and
+provenance tags that carry model and effort, e.g. `ai-suggested(claude-opus-5-5, high)`.

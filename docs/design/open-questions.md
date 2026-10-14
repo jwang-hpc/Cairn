@@ -53,3 +53,5 @@
     — immediate, partial; (b) a pf anchor that blocks agent subnets from reaching the host except each
     agent's proxy port — structural, needs sudo once and subnet management. Decide before M7 (agents reading
     untrusted literature).
+    **Applied (2026-10-14):** AirPlay Receiver turned off by the user; `lsof` shows nothing on 5000/7000. The
+    general case (any service on 0.0.0.0) still needs (b).
