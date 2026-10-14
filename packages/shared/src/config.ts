@@ -183,6 +183,19 @@ export const EngineConfig = Type.Object(
     ),
     /** Where research projects (one git repo each) live. Default: <engine home>/projects. */
     projects_dir: Type.Optional(NonEmpty),
+    /** Literature sources (M7). */
+    literature: Type.Optional(
+      Type.Object(
+        {
+          /**
+           * Contact address sent to OpenAlex and Crossref as their "polite pool" mailto (faster, more reliable). It goes
+           * only to those two services, never to a model. Set with `re literature contact <email>`.
+           */
+          contact_email: Type.Optional(Type.String({ pattern: "^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$", maxLength: 254 })),
+        },
+        strict,
+      ),
+    ),
     /** Agent sandboxes (DR-0005). */
     agent: Type.Optional(
       Type.Object(
