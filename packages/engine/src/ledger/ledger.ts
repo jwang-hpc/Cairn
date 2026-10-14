@@ -49,7 +49,7 @@ const CLAIM_GATED = new Set([CLAIMS]);
 /** The claim gate's own commits; only approveClaim uses it. */
 const GATE_OP = "claim-gate";
 /** Where engine artifacts may be written via writeArtifacts(): panel rounds, job records, executor evidence, parser tables. */
-const ARTIFACT_AREAS = ["engine/panels/", "engine/jobs/", "evidence/raw/", "evidence/tables/", "engine/claims/reviews/"];
+const ARTIFACT_AREAS = ["engine/panels/", "engine/jobs/", "evidence/raw/", "evidence/tables/", "engine/claims/reviews/", "lit/"];
 
 const pad = (n: number) => String(n).padStart(2, "0");
 /** ARA timestamp: local "YYYY-MM-DDTHH:MM". */

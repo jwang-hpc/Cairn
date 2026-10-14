@@ -78,6 +78,15 @@ fixed in M6.5.
 Literature proxy MCP (Semantic Scholar, OpenAlex, arXiv, DBLP, Crossref); structured paper notes; citation
 resolution (DOI/DBLP) enforced; local overrides of PiPilot skills that referenced literature-search.
 Acceptance: related-work note set for a known topic, every citation resolvable.
+- **M7: implemented (2026-10-14); acceptance pending** (`sh scripts/acceptance-m7.sh --full`). Design is in the
+  DR-0006 M7 amendment.
+  - M7.1 `re literature search | fetch | resolve | contact | key s2` over Semantic Scholar, OpenAlex, arXiv, and
+    Crossref, with doi.org checking DOIs.
+  - M7.2 the `literature.*` tools for agents; the literature role has no network of its own.
+  - M7.3 per-paper notes and the `literature-review` skill; overrides of the six PiPilot skills that used
+    `literature-search`; `re literature check` and `accept`.
+- DBLP is deferred: it answered with a bot-check page. Google Scholar is link-out only.
+- Open: whether `restricted` projects may send search queries to these public APIs.
 
 ## M8 — Desktop app
 Electron + React over the engine API: project view (ARA claims <-> evidence <-> trace), approval inbox

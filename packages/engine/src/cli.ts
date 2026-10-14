@@ -147,7 +147,7 @@ export async function runCli(argv: readonly string[], io: CliIo, deps: CliDeps =
 
   if (command === "panel") return runPanelCommand(engine, rest, v, io, deps.env ?? process.env);
   if ((LITERATURE_COMMANDS as readonly string[]).includes(command)) {
-    return runLiteratureCommand(engine, rest, v, { ...io, ...(io.login ? { ask: (q: string, secret: boolean) => io.login!.ask(q, secret) } : {}) }, deps.literature);
+    return runLiteratureCommand(engine, rest, v, { ...io, ...(io.login ? { ask: (q: string, secret: boolean) => io.login!.ask(q, secret) } : {}) }, deps.literature, deps.env ?? process.env);
   }
   if ((EVIDENCE_COMMANDS as readonly string[]).includes(command)) return runEvidenceCommand(engine, rest, v, io, deps.env ?? process.env, deps.parsers);
   if ((CLAIM_COMMANDS as readonly string[]).includes(command)) return runClaimCommand(engine, rest, v, io, deps.env ?? process.env);
@@ -302,6 +302,7 @@ async function run(
       io.out(`claim    ${worktree.branch}:${f.path}   check: re claim check ${worktree.branch}:${f.path}`);
     }
   }
+  if (commit && r.files.some((f) => f.path.startsWith("lit/"))) io.out(`lit      re literature check ${worktree.branch}   then: re literature accept ${worktree.branch}`);
   for (const j of (await overrides?.jobs?.list().catch(() => [])) ?? []) {
     if (j.author.kind === "agent" && j.author.run === r.run) io.out(`job      ${j.id} ${j.state} (${j.experiment} → ${j.target})  review: re job show ${j.id}`);
   }
