@@ -89,6 +89,28 @@ export function citationsIn(md: string): string[] {
   return keys;
 }
 
+/**
+ * A note's frontmatter. Agents write it as flat `key: value` lines and titles often hold a colon ("SZ3: A Modular
+ * ..."), which YAML rejects unquoted; so when YAML fails, each line is read as key, colon, value (numbers as numbers).
+ */
+export function frontmatter(text: string): Record<string, unknown> | undefined {
+  const front = /^---\r?\n([\s\S]*?)\r?\n---\r?\n/.exec(text)?.[1];
+  if (front === undefined) return undefined;
+  const doc = parseDocument(front);
+  if (doc.errors.length === 0) {
+    const js = doc.toJS() as unknown;
+    if (js && typeof js === "object" && !Array.isArray(js)) return js as Record<string, unknown>;
+  }
+  const out: Record<string, unknown> = {};
+  for (const line of front.split(/\r?\n/)) {
+    const m = /^([A-Za-z_][\w-]*):\s*(.*?)\s*$/.exec(line);
+    if (!m) continue;
+    const v = m[2]!.replace(/\s+#.*$/, "");
+    out[m[1]!] = /^-?\d+$/.test(v) ? Number(v) : v.replace(/^(["'])(.*)\1$/, "$2");
+  }
+  return out;
+}
+
 /** A paper note's relevance score: the agent's judgement of the paper against the project's problem, 0-10. */
 export const isRelevance = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= 10;
 
@@ -233,13 +255,7 @@ export async function checkLiterature(files: LitFiles, lit: LiteratureService): 
       cited.add(k);
       if (!byKey.has(k)) fail(n.path, `cites ${k}, which is not in lit/refs.bib (resolve it first)`);
     }
-    const front = /^---\n([\s\S]*?)\n---\n/.exec(n.text)?.[1];
-    let meta: { paper?: unknown; relevance?: unknown } = {};
-    try {
-      meta = (front ? (parseDocument(front).toJS() as typeof meta | null) : null) ?? {};
-    } catch {
-      fail(n.path, "frontmatter is not YAML");
-    }
+    const meta = frontmatter(n.text) ?? {};
     if (meta.paper === undefined) continue;
     const key = /^lit\/notes\/([a-z0-9]+)\.md$/.exec(n.path)?.[1];
     const entry = key ? byKey.get(key) : undefined;
@@ -279,15 +295,8 @@ export function paperNotes(notes: LitFiles["notes"]): PaperNote[] {
   const out: PaperNote[] = [];
   for (const n of notes) {
     const key = /^lit\/notes\/([a-z0-9]+)\.md$/.exec(n.path)?.[1];
-    const front = /^---\n([\s\S]*?)\n---\n/.exec(n.text)?.[1];
-    if (!key || !front) continue;
-    let meta: Record<string, unknown>;
-    try {
-      meta = (parseDocument(front).toJS() as Record<string, unknown> | null) ?? {};
-    } catch {
-      continue;
-    }
-    if (meta.paper === undefined) continue;
+    const meta = key ? frontmatter(n.text) : undefined;
+    if (!key || !meta || meta.paper === undefined) continue;
     out.push({
       path: n.path,
       key,

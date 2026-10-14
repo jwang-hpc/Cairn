@@ -10,7 +10,7 @@ import type { LoadedConfig } from "../config/load.js";
 import { Engine } from "../engine.js";
 import { envelope } from "../events/log.js";
 import { Ledger } from "../ledger/ledger.js";
-import { checkLiterature, citationsIn, mergePreprints, paperNotes, parseBibtex } from "./check.js";
+import { checkLiterature, citationsIn, frontmatter, mergePreprints, paperNotes, parseBibtex } from "./check.js";
 
 const SZ3 = "10.1109/tbdata.2022.3201176";
 const TOPOSZ_DOI = "10.1109/tvcg.2023.1234";
@@ -158,6 +158,24 @@ describe("checkLiterature (re-verifies, never trusts the log)", () => {
       { path: "lit/notes/c2022z.md", text: note("doi:10.1/c", SECTIONS, 11) },
       { path: "lit/notes/related-work.md", text: "no frontmatter [@a2020x]" },
     ]).map((n) => [n.key, n.relevance])).toEqual([["b2021y", 9], ["a2020x", 4], ["c2022z", undefined]]);
+  });
+
+  it("reads frontmatter whose title holds a colon (agents don't quote it)", async () => {
+    // As the literature agent wrote it in the M7 acceptance run (2026-10-14).
+    const text = `---\npaper: doi:${SZ3}\ntitle: SZ3: A Modular Framework for Composing Prediction-Based Error-Bounded Lossy Compressors\nyear: 2023\nbased_on: abstract and metadata\nrelevance: 9\nscholar: https://scholar.google.com/scholar?q=SZ3%3A+A\n---\n# SZ3\n\n${SECTIONS}`;
+    expect(frontmatter(text)).toEqual({
+      paper: `doi:${SZ3}`,
+      title: "SZ3: A Modular Framework for Composing Prediction-Based Error-Bounded Lossy Compressors",
+      year: 2023,
+      based_on: "abstract and metadata",
+      relevance: 9,
+      scholar: "https://scholar.google.com/scholar?q=SZ3%3A+A",
+    });
+    expect(frontmatter('---\ntitle: "Quoted: fine"\nrelevance: 7\n---\n')).toEqual({ title: "Quoted: fine", relevance: 7 });
+    expect(frontmatter("no frontmatter")).toBeUndefined();
+    const r = await checkLiterature({ refs: GOOD_BIB, resolutions: LOG, notes: [{ path: "lit/notes/liang2023sz3.md", text }] }, lit());
+    expect(r.items.filter((i) => /relevance/.test(i.message))).toEqual([]);
+    expect(paperNotes([{ path: "lit/notes/liang2023sz3.md", text }])).toMatchObject([{ key: "liang2023sz3", relevance: 9, year: 2023, title: expect.stringMatching(/^SZ3: A Modular/) }]);
   });
 
   it("paper notes are named after their entry and name the same work", async () => {
