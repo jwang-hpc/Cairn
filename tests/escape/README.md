@@ -24,10 +24,13 @@ pnpm test:escape          # or: corepack pnpm test:escape
 | 7 | Launcher with `--ssh`, bare `-e`, out-of-root mount, default network, other kernel args, secret env, symlinked role path | refused before the runtime runs anything |
 | 8 | Every attempt logged | one tool_call + tool_result per attempt |
 
-## Last run (2026-10-14, pf guard installed; Apple container 1.5.0, macOS 26.6.2)
+## Last run (2026-10-14, pf guard + ipv6.disable=1; Apple container 1.5.0, macOS 26.6.2)
 11/11 pass; 35 attempts logged. 4b: every probed host port CLOSED to agents (test service on `0.0.0.0`, 22, 5000,
-7000, 3000, 8000, 8080) with AirPlay Receiver on. 4c: the agent has only IPv6 link-local on eth0 and **reached** a
-host service on `::` via the bridge's link-local address (open question 12, IPv6 part).
+7000, 3000, 8000, 8080) with AirPlay Receiver on. 4c: the agent has no IPv6 interfaces; the bridge's link-local
+address is unreachable.
+
+Run before ipv6.disable=1 (same day): 4c showed the agent **reaching** a host service on `::` via the bridge's
+IPv6 link-local address.
 
 ## Run after M5 (2026-10-14)
 10/10 pass, including 6b (job policy and planted symlinks, read inside the container); 33 attempts logged;
