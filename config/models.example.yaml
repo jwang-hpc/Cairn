@@ -48,4 +48,5 @@ routing:
   coder:      { worker: claude-sonnet@high, fallback: [gpt-frontier@high] }
   analysis:   { worker: claude-opus@high, reviewer: gpt-frontier@high }
   writer:     { worker: claude-opus@medium }
+  orchestrator: { worker: claude-opus@high }   # the research-session chat (DR-0014); without it: routing.analysis.worker
 projects_default_data_class: unpublished

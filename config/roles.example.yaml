@@ -19,4 +19,8 @@ roles:
     mounts: { read: [logic/, evidence/, drafts/], write: [drafts/] }
     network: []
     executor_tools: []
+  orchestrator:   # research sessions (DR-0014): host-side and read-only over the committed project; never a container
+    mounts: { read: [PAPER.md, logic/, trace/, evidence/tables/, analysis/, lit/notes/, engine/claims/, engine/jobs/], write: [] }
+    network: []
+    executor_tools: []
 defaults: { secrets: none, egress: deny }

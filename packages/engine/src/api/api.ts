@@ -25,6 +25,14 @@ import { type Ledger, LedgerError } from "../ledger/ledger.js";
 import { renderTree } from "../ledger/tree.js";
 import { listPanels } from "../panel/commands.js";
 import { judgePanel, PanelError, panelView, readPanel, renderPanel } from "../panel/panel.js";
+import { join } from "node:path";
+import type { LiteratureService } from "@cairn/executor";
+import { openLiteratureService } from "../literature/literature.js";
+import { REPO_ROOT } from "../paths.js";
+import { DelegationError, Delegations, runSteps, SessionHub } from "../session/delegate.js";
+import { runTurn } from "../session/orchestrator.js";
+import { type SessionMeta, SessionStore } from "../session/store.js";
+import type { WorkerDeps } from "../worker/run.js";
 import { type EventStream, eventStream } from "./events.js";
 
 export interface ApiOptions {
@@ -42,6 +50,9 @@ export interface ApiOptions {
   maxBody?: number;
   /** Where unexpected errors are reported (default: stderr). Never sent to the client. */
   log?: (line: string) => void;
+  /** Research sessions: worker deps overrides (tests inject a sandbox stand-in) and the per-project worker limit (3). */
+  worker?: Partial<Omit<WorkerDeps, "engine" | "observe">>;
+  maxWorkersPerProject?: number;
 }
 
 export interface Api {
@@ -170,6 +181,20 @@ export function createApi(engine: Engine, opts: ApiOptions = {}): Api {
   const log = (line: string) => (opts.log ?? ((l: string) => process.stderr.write(`${l}\n`)))(scrub(line));
   const jobs: JobService = openJobService(engine, opts.jobs);
   const streams = new Set<EventStream>();
+  // Research sessions (DR-0014): one store, one event hub, one delegation runner per API.
+  const sessions = new SessionStore(engine.paths.home);
+  const hub = new SessionHub();
+  let literature: Promise<LiteratureService> | undefined;
+  const delegations = new Delegations({
+    engine,
+    store: sessions,
+    hub,
+    ledgerFor: (p) => openCurrentProject(engine, { project: p }, env),
+    worker: { skillsDir: join(REPO_ROOT, "skills"), jobs, ...opts.worker },
+    workerExtras: async () => (opts.worker?.literature ? {} : { literature: await (literature ??= openLiteratureService(engine)) }),
+    maxPerProject: opts.maxWorkersPerProject ?? 3,
+  });
+  const turning = new Set<string>();
   let port: number | undefined;
   let closed = false;
 
@@ -203,6 +228,20 @@ export function createApi(engine: Engine, opts: ApiOptions = {}): Api {
     return { md: await readBranchDraft(ledger, ref), ref };
   };
   const project = (l: Ledger) => ({ name: l.name, dataClass: l.dataClass, dir: l.dir });
+  const sessionOf = async (l: Ledger, id: string) => {
+    try {
+      return await sessions.load(l.name, id);
+    } catch {
+      throw new ApiError(404, `no session ${id} in ${l.name}`);
+    }
+  };
+  const meta = (r: SessionMeta) => ({ v: r.v, id: r.id, project: r.project, title: r.title, created: r.created, updated: r.updated, turns: r.turns });
+  const proposalAction = (action: "launch" | "dismiss" | "stop"): Handler => async (c) => {
+    const l = await openCurrentProject(engine, { project: c.params[0]! }, env);
+    await sessionOf(l, c.params[1]!);
+    const ref = { project: l.name, session: c.params[1]!, proposal: c.params[2]! };
+    return { proposal: await delegations[action](ref) };
+  };
   const job = (c: Ctx) => c.params[0]!;
 
   const routes: [method: "GET" | "POST", pattern: string, handler: Handler][] = [
@@ -233,6 +272,51 @@ export function createApi(engine: Engine, opts: ApiOptions = {}): Api {
       const l = await openCurrentProject(engine, { project: c.params[0]! }, env);
       return { project: l.name, drafts: await listDrafts(l) };
     }],
+    // research sessions (re chat; DR-0014)
+    ["GET", "/api/projects/:name/sessions", async (c) => {
+      const l = await openCurrentProject(engine, { project: c.params[0]! }, env);
+      return { project: l.name, sessions: await sessions.list(l.name), workers: delegations.activity(l.name) };
+    }],
+    ["POST", "/api/projects/:name/sessions", async (c) => {
+      const l = await openCurrentProject(engine, { project: c.params[0]! }, env);
+      const title = optString(await c.body(), "title");
+      return { session: meta(await sessions.create(l.name, title)) };
+    }],
+    ["GET", "/api/projects/:name/sessions/:id", async (c) => {
+      const l = await openCurrentProject(engine, { project: c.params[0]! }, env);
+      const rec = await sessionOf(l, c.params[1]!);
+      return { session: meta(rec), summary: rec.summary ?? null, proposals: rec.proposals, transcript: await sessions.transcript(l.name, rec.id), workers: delegations.activity(l.name) };
+    }],
+    ["POST", "/api/projects/:name/sessions/:id/messages", async (c) => {
+      const l = await openCurrentProject(engine, { project: c.params[0]! }, env);
+      const text = needString(await c.body(), "text", "text must be the message");
+      if (text.length > 20_000) throw new ApiError(400, "a message is at most 20,000 characters");
+      const rec = await sessionOf(l, c.params[1]!);
+      const key = `${l.name}/${rec.id}`;
+      if (turning.has(key)) throw new ApiError(409, "the orchestrator is still answering the previous message");
+      turning.add(key);
+      const at = { project: l.name, session: rec.id };
+      try {
+        const r = await runTurn(
+          { engine, ledger: l, store: sessions, jobs: async () => (await jobs.list({ project: l.name })).map((j) => ({ id: j.id, state: j.state, experiment: j.experiment, target: j.target })) },
+          rec,
+          text,
+          {
+            delta: (t) => hub.emit({ type: "turn_delta", ...at, text: t }),
+            tool: (name, args) => hub.emit({ type: "turn_tool", ...at, name, detail: JSON.stringify(args ?? {}).slice(0, 200) }),
+            proposal: (p) => hub.emit({ type: "proposal", ...at, proposal: p }),
+          },
+        );
+        hub.emit({ type: "turn_end", ...at, run: r.run, usd: r.usd, error: r.error });
+        return { text: r.text, run: r.run, usd: r.usd, ms: r.ms, error: r.error, proposals: r.proposals };
+      } finally {
+        turning.delete(key);
+      }
+    }],
+    ["POST", "/api/projects/:name/sessions/:id/proposals/:pid/launch", proposalAction("launch")],
+    ["POST", "/api/projects/:name/sessions/:id/proposals/:pid/dismiss", proposalAction("dismiss")],
+    ["POST", "/api/projects/:name/sessions/:id/proposals/:pid/stop", proposalAction("stop")],
+    ["GET", "/api/runs/:run/steps", async (c) => ({ run: c.params[0]!, steps: await runSteps(engine.paths.home, c.params[0]!) })],
     ["GET", "/api/projects/:name/decisions", async (c) => {
       const l = await openCurrentProject(engine, { project: c.params[0]! }, env);
       return { project: l.name, decisions: await l.decisions() };
@@ -309,6 +393,7 @@ export function createApi(engine: Engine, opts: ApiOptions = {}): Api {
       s = eventStream({
         home: engine.paths.home,
         jobs: () => jobs.list(),
+        subscribe: (push) => hub.subscribe((e) => push("session", e)),
         ...poll,
         signal: c.request.signal,
         onError: (e) => log(`api: events: ${msg(e)}`),
@@ -328,6 +413,7 @@ export function createApi(engine: Engine, opts: ApiOptions = {}): Api {
     if (e instanceof JobError || e instanceof LedgerError || e instanceof PanelError) {
       return json(NOT_FOUND.test(e.message) ? 404 : CONFLICT.test(e.message) ? 409 : 400, { error: e.message });
     }
+    if (e instanceof DelegationError) return json(/^no proposal/.test(e.message) ? 404 : 409, { error: e.message });
     // The reviewer model could not be asked or failed (provider refused the data class, route down): upstream.
     if (e instanceof ReviewerError) return json(502, { error: e.message });
     if (e instanceof BudgetExceededError) return json(429, { error: e.message });

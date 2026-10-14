@@ -17,7 +17,7 @@ import {
   type WorktreeRef,
 } from "@cairn/launcher";
 import { AuditLog, type JobService, type LiteratureService } from "@cairn/executor";
-import { type DataClass, type EffortLevel, type UsageEvent, validate, WorkerReport } from "@cairn/shared";
+import { type DataClass, type EffortLevel, type EngineEvent as EngineEventT, type UsageEvent, validate, WorkerReport } from "@cairn/shared";
 import type { Engine } from "../engine.js";
 import { envelope, readUsage } from "../events/log.js";
 import type { CallSpec } from "../models/layer.js";
@@ -35,6 +35,8 @@ export interface WorkerBudget {
   effort?: EffortLevel;
   /** Wall-clock limit; default engine.yaml agent.max_minutes, else 15. */
   maxMinutes?: number;
+  /** Stops the run (the user's Stop): the agent is aborted, the sandbox closed, and what it changed is kept. */
+  signal?: AbortSignal;
 }
 
 export type WorkerStatus = "done" | "failed" | "needs_input";
@@ -63,6 +65,8 @@ export interface WorkerDeps {
   launch?: (opts: SandboxOptions) => Promise<Sandbox>;
   /** The Cairn project the worktree belongs to: its data class governs every model call (invariant 9). */
   project?: { name: string; dataClass: DataClass };
+  /** Live view of the run (research sessions, DR-0014): its id once known, then each event as it is logged. */
+  observe?: { started?: (run: string) => void; event?: (e: EngineEventT) => void };
   /** Executor services; roles with executor_tools get them only for a project run (DR-0006). */
   jobs?: JobService;
   literature?: LiteratureService;
@@ -123,6 +127,7 @@ export async function runWorker(deps: WorkerDeps, task: TaskSpec, worktree: Work
   const maxMinutes = budget.maxMinutes ?? cfg.engine.agent?.max_minutes ?? DEFAULT_MAX_MINUTES;
 
   const runId = randomUUID();
+  deps.observe?.started?.(runId);
   const machine = cfg.engine.machine;
   const home = engine.paths.home;
   const outboxDir = join(home, "outbox", worktree.agentId);
@@ -132,7 +137,14 @@ export async function runWorker(deps: WorkerDeps, task: TaskSpec, worktree: Work
   await rm(join(outboxDir, "report.json"), { force: true });
   await writeFile(join(outboxDir, "task.md"), task.text);
 
-  const log = (e: Parameters<Engine["log"]["append"]>[0]) => engine.log.append(e).catch(() => {});
+  const log = (e: Parameters<Engine["log"]["append"]>[0]) => {
+    try {
+      deps.observe?.event?.(e);
+    } catch {
+      // an observer must not break the run
+    }
+    return engine.log.append(e).catch(() => {});
+  };
   const onEgress = (d: EgressDecision) =>
     void log({ ...envelope(runId, machine), type: "egress", agent: worktree.agentId, role, decision: d.decision, target: d.target, reason: d.reason });
 
@@ -200,14 +212,21 @@ export async function runWorker(deps: WorkerDeps, task: TaskSpec, worktree: Work
     const prompt = `Your task (also saved at /outbox/task.md):\n\n${task.text}`;
     await log({ ...envelope(runId, machine), type: "message", role: "user", text: prompt });
     let timedOut = false;
+    let stopped = budget.signal?.aborted === true;
     const timer = setTimeout(() => {
       timedOut = true;
       agent?.abort();
     }, maxMinutes * 60_000);
+    const onStop = () => {
+      stopped = true;
+      agent?.abort();
+    };
+    budget.signal?.addEventListener("abort", onStop);
     try {
-      await agent.prompt(prompt);
+      if (!stopped) await agent.prompt(prompt);
     } finally {
       clearTimeout(timer);
+      budget.signal?.removeEventListener("abort", onStop);
     }
     const last = agent.state.messages.at(-1);
     if (last?.role === "assistant") {
@@ -215,6 +234,7 @@ export async function runWorker(deps: WorkerDeps, task: TaskSpec, worktree: Work
       if (last.stopReason === "error" || last.stopReason === "aborted") error = last.errorMessage ?? last.stopReason;
     }
     if (timedOut) error = `time limit reached (${maxMinutes} min)`;
+    if (stopped) error = "stopped by the user";
   } catch (e) {
     error = (e as Error).message;
   } finally {
