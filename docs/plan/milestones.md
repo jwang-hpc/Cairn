@@ -123,7 +123,11 @@ Acceptance: the M5 and M6 flows can be completed entirely from the app.
     completed;
   - an analysis agent's claim draft went through the support check, a cross-vendor rigor review (REVISE), and the
     user's approval into `logic/claims.md` as C01 (user-revised).
-- Open: panels (blind comparison); notifications; Keychain via safeStorage; signing and notarization.
+- **Next (DR-0014, proposed):** a chat-centred app.
+  - M8.4: orchestrator sessions in the engine, and `re chat`.
+  - M8.5: the chat layout, with Outline, Approvals, Results, and Literature panels.
+  - M8.6: paper preview.
+  - Then: blind panel comparison, notifications, Keychain via safeStorage, signing and notarization.
 
 ## M9 — Campaigns and async
 Campaign spec + runner (scheduler-native arrays/dependencies or headless engine on workstation);
