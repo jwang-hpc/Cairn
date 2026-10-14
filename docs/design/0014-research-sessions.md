@@ -1,5 +1,5 @@
 # DR-0014: Research sessions: a chat-centred app
-Status: Proposed (2026-10-14). Needs the user's OK before it is built.
+Status: Accepted (2026-10-14), with the user's changes after a survey of PiPilot's app (see "Amendment" below).
 
 ## Context
 - **The gap:** the user expected to work with Cairn the way they work with Claude or ChatGPT: a chat window in which
@@ -84,3 +84,43 @@ This replaces the order of M8's remaining work.
   3. approve that job;
   4. see the new figure in Results;
   5. delegate a revised claim, and approve it.
+
+## Amendment (2026-10-14): user's changes after a survey of PiPilot's app
+PiPilot (Dong Dai's Research Copilot) puts one chat at the centre with tabs and a preview drawer. Its approvals live
+in a "Needs you" queue in its Compute tab. Its known gaps: one thread per project with no way to start or switch
+chats, earlier answers lost after an analysis step, input blocked while the agent works, no in-app figures or paper
+preview, and agent code running unsandboxed on the host. The user adopted the following; they replace point 1 above
+where they differ.
+- **Layout:**
+  - **Centre tabs:** Chat | Literature | Results | Approvals, with badges for what waits.
+  - **Left sidebar:** the project outline (problem, hypotheses, exploration tree) and files.
+  - **Preview drawer:** an item opened from anywhere (figure, table, claim, note, draft, a worker's log) slides in
+    over the chat, which keeps the chat wide. Paper preview opens there too.
+- **One "Needs you" queue:**
+  - Approval cards appear in the chat and are mirrored in the Approvals tab, with badges.
+  - "Send back" requires the user's comment.
+  - Approving acts directly through the engine, without a model call. The result comes back as a system row,
+    never as a message in the user's name.
+- **Chat details:**
+  - one compact card per worker, with its steps folded;
+  - a footer per round with time and cost;
+  - a "welcome back" recap built from the ledger (what was done, what is next);
+  - "save to ledger" on a message, as a decision or note;
+  - @-mentions of project items;
+  - the user can keep typing while workers run; messages queue for the orchestrator.
+- **Chats:** one continuing chat per project, with compaction and persisted summaries, plus "New chat", which
+  starts fresh from the ledger.
+- **What each sub-agent is doing (the user's question).** The user talks with the orchestrator; the orchestrator
+  delegates to sub-agents (workers). Every delegated worker shows in the chat as a live card:
+  - **The card:** role and task, state (queued, running, done, failed, needs input), elapsed time, cost so far,
+    and its current step in plain words ("reading evidence/tables/…", "running bench.py", "wrote
+    staging/claims/…"), with the earlier steps folded ("show all 23 steps").
+  - **An activity strip** above the input lists every running worker (up to three) with its current step.
+  - **Opening a card** shows the worker's full log in the preview drawer: every step, the commands and their
+    output, and its messages. A Stop button ends the worker.
+  - **When the worker ends,** its card shows the report, the files it changed, and anything now waiting for approval.
+  - **Questions:** a worker that needs a decision ends with its questions as a card in the chat. The user's answer
+    goes to a new worker run with that answer and the earlier report (sessions stay disposable, DR-0009).
+
+  The steps come from the event log, which already records each worker's tool calls and results by run
+  (invariant 6). Talking to a running worker directly (steering it mid-run) stays out of scope for now.

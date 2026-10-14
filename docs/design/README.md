@@ -17,6 +17,6 @@ Status legend: Accepted = decided; Open = needs a decision (see open-questions.m
 | 0011 | Campaigns (parameter sweeps) | Accepted |
 | 0012 | Skills, model evolution, and evaluation | Accepted (amended 2026-10-14) |
 | 0013 | Multi-provider model layer (Claude, GPT, Gemini, MAI) | Accepted (amended 2026-10-14) |
-| 0014 | Research sessions: a chat-centred app | Proposed (2026-10-14) |
+| 0014 | Research sessions: a chat-centred app | Accepted (2026-10-14) |
 
 Amend a DR by editing it with a dated "Amendment" section; never silently rewrite history.
