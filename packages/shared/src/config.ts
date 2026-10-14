@@ -13,9 +13,15 @@ export const DataClass = Type.Union([Type.Literal("public"), Type.Literal("unpub
 export type DataClass = Type.Static<typeof DataClass>;
 
 /** pi-ai reasoning levels that an engine effort level can map to. */
-export const PiThinkingLevel = Type.Union(
-  ["off", "minimal", "low", "medium", "high", "xhigh", "max"].map((l) => Type.Literal(l)),
-);
+export const PiThinkingLevel = Type.Union([
+  Type.Literal("off"),
+  Type.Literal("minimal"),
+  Type.Literal("low"),
+  Type.Literal("medium"),
+  Type.Literal("high"),
+  Type.Literal("xhigh"),
+  Type.Literal("max"),
+]);
 
 /** "alias@effort", e.g. "claude-opus@high". */
 export const ModelRef = Type.String({ pattern: "^[a-z0-9][a-z0-9-]*@(low|medium|high|max)$" });
