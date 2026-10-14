@@ -18,12 +18,21 @@ const url = vite.resolvedUrls?.local[0];
 if (!url) throw new Error("vite did not report a URL");
 console.log(`renderer: ${url}`);
 
+// Each child gets its own process group, and stopping it stops the group: TypeScript 7's tsc is a Node launcher
+// that runs the native compiler as a child, which would otherwise outlive a stopped launcher (and keep watching).
 const children = new Set();
 const run = (cmd, args, env = process.env) => {
-  const c = spawn(cmd, args, { cwd: app, env, stdio: "inherit" });
+  const c = spawn(cmd, args, { cwd: app, env, stdio: "inherit", detached: true });
   children.add(c);
   c.on("exit", () => children.delete(c));
   return c;
+};
+const stop = (c) => {
+  try {
+    process.kill(-c.pid, "SIGTERM");
+  } catch {
+    // already gone
+  }
 };
 
 // One build first, so Electron starts from current code; then watch.
@@ -48,7 +57,7 @@ const restart = () => {
       restarting = false;
       startElectron();
     });
-    electron?.kill("SIGTERM");
+    if (electron) stop(electron);
   }, 400);
 };
 for (const dir of ["dist/main", "dist/preload"]) watch(join(app, dir), { recursive: true }, (_e, f) => f && /\.c?js$/.test(f) && restart());
@@ -56,9 +65,13 @@ startElectron();
 
 async function shutdown(code) {
   quitting = true;
-  for (const c of children) c.kill("SIGTERM");
+  for (const c of children) stop(c);
   await vite.close();
   process.exit(code);
 }
 process.on("SIGINT", () => void shutdown(0));
 process.on("SIGTERM", () => void shutdown(0));
+process.on("SIGHUP", () => void shutdown(0));
+process.on("exit", () => {
+  for (const c of children) stop(c);
+});
