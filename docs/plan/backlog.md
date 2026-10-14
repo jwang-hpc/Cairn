@@ -107,8 +107,8 @@ and year).
     hold anything. Any paper cited from the library still goes through `literature.resolve` into
     `lit/refs.bib`.
 - **Writes:** never by an agent. Only on a user action: `re literature accept` offers "also add to Zotero?", or a
-  separate `re library add`. Writes go through the Web API with a key allowed to write to one library only.
-  Suggested: a Zotero group "Cairn", or a "Cairn" collection, so Cairn's items stay apart from hand-curated ones.
+  separate `re library add`. Writes go through the Web API to the "Cairn" group only, so Cairn's items stay apart
+  from the user's hand-curated library.
   Before creating an item, Cairn looks the paper up by DOI or arXiv id and attaches its note to an existing item
   rather than making a duplicate.
   - Each Cairn item gets the tag `cairn` and `Citation Key: <citekey>` in Extra (the Better BibTeX convention).
@@ -124,8 +124,12 @@ and year).
   - how the engine reaches `localhost:23119` (host only).
 
   No new dependency is needed: plain HTTP with fetch.
+- **Decided (2026-10-14):**
+  - **Storage:** the user keeps PDFs on WebDAV, with local copies in Zotero desktop. PDFs and full text therefore come
+    only through the desktop (local API or storage folder), never the Web API.
+  - **Writes:** Cairn writes only to a separate Zotero group, "Cairn". Its key may write to that group alone; the
+    user's personal library is read-only to Cairn.
 - **Decide:**
-  - Personal library or a "Cairn" group.
   - Whether Zotero items with no DOI or arXiv id (books, DOE/OSTI reports, theses) can be cited as user-vouched
     references with `user` provenance, since `resolve` can't verify them.
   - Whether to use Zotero's indexed full text (`qmode=everything`, `/fulltext`) for search.
