@@ -48,9 +48,11 @@ export interface CallSpec {
   /** Data class of the project the context comes from (DR-0013). */
   dataClass: DataClass;
   run: BudgetRun;
+  /** Restrict to one configured route (health checks); no fallback. */
+  onlyRoute?: Route;
 }
 
-const routeLabel = (r: Route) => `${r.pi_provider}/${r.auth}`;
+export const routeLabel = (r: Route) => `${r.pi_provider}/${r.auth}`;
 
 const ZERO_USAGE: AssistantMessage["usage"] = {
   input: 0,
@@ -111,14 +113,17 @@ export class ModelLayer {
     }
 
     const failures: string[] = [];
-    for (const route of provider.routes) {
+    const only = spec.onlyRoute;
+    const routes = only ? provider.routes.filter((r) => r.pi_provider === only.pi_provider && r.auth === only.auth) : provider.routes;
+    if (routes.length === 0) return errorStream(vendor, m.id, `route ${only ? routeLabel(only) : "(none)"} is not configured for ${vendor}`);
+    for (const route of routes) {
       const label = routeLabel(route);
       const model = this.pi.models[route.auth].getModel(route.pi_provider, m.id);
       if (!model) {
         failures.push(`${label}: pi-ai has no model '${m.id}' for provider '${route.pi_provider}'`);
         continue;
       }
-      const unavailable = await this.#unavailable(route);
+      const unavailable = await this.routeProblem(route);
       if (unavailable) {
         failures.push(`${label}: ${unavailable}`);
         continue;
@@ -144,7 +149,10 @@ export class ModelLayer {
   }
 
   /** Why a route can't be used right now, or undefined if it can. */
-  async #unavailable(route: Route): Promise<string | undefined> {
+  async routeProblem(route: Route): Promise<string | undefined> {
+    if (this.pi.models[route.auth].getModels(route.pi_provider).length === 0) {
+      return `pi-ai has no provider '${route.pi_provider}' (check models.yaml routes)`;
+    }
     const stored = await this.pi.stores[route.auth].read(route.pi_provider);
     if (route.auth === "oauth" && stored?.type !== "oauth") {
       return `not logged in (run: re login ${route.pi_provider} oauth)`;
