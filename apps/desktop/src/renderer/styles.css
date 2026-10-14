@@ -69,6 +69,7 @@ textarea { font: inherit; color: inherit; background: var(--bg); border: 1px sol
 .tab.selected { border-color: var(--line); background: var(--panel); font-weight: 600; }
 .badge { background: var(--warn); color: var(--panel); border-radius: 8px; padding: 0 6px; font-size: 11px; }
 button.small { font-size: 11px; padding: 1px 6px; text-transform: none; letter-spacing: 0; }
+.gate { font-size: 12px; }
 .gate-not-reviewed { color: var(--warn); }
 .gate-reviewed { color: var(--accent); }
 .gate-approved { color: var(--ok); }

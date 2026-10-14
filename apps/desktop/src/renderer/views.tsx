@@ -176,7 +176,7 @@ export function ClaimsList(props: { drafts: Draft[]; claims: Entry[]; selected: 
               return (
                 <li key={d.ref}>
                   <button type="button" className={props.selected === `draft:${d.ref}` ? "job selected" : "job"} onClick={() => props.onSelect(`draft:${d.ref}`)}>
-                    <span className={`state gate-${g.stage.replace(" ", "-")}`}>{g.label}</span>
+                    <span className={`gate gate-${g.stage.replace(" ", "-")}`}>{g.label}</span>
                     <span className="job-main">{d.title}</span>
                     <span className="muted">{d.ref}</span>
                   </button>

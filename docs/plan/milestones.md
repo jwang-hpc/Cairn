@@ -118,6 +118,11 @@ Acceptance: the M5 and M6 flows can be completed entirely from the app.
     review, then approval with an optional note. Approval is enabled only once a review of this exact draft is on
     file, and the engine re-checks support.
   - **Ledger:** hypotheses, the exploration tree, decisions.
+- **M8 acceptance met (2026-10-14), by the user in the app:**
+  - an agent-proposed job on `m5-demo` was approved and launched from the inbox, ran on the workstation, and
+    completed;
+  - an analysis agent's claim draft went through the support check, a cross-vendor rigor review (REVISE), and the
+    user's approval into `logic/claims.md` as C01 (user-revised).
 - Open: panels (blind comparison); notifications; Keychain via safeStorage; signing and notarization.
 
 ## M9 — Campaigns and async
