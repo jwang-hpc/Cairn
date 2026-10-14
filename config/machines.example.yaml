@@ -1,20 +1,24 @@
 machines:
   workstation:
-    host: "<hostname>"   # reached over VPN + SSH ControlMaster
+    host: "workstation"  # ~/.ssh/config alias; reached over VPN + your SSH ControlMaster (scripts/ssh-master.sh)
     scheduler: none
-    auto_approve_below: { cores: 32, hours: 4 }
+    scratch: "/data/USER/scratch"   # job dirs: <scratch>/cairn/<project>/<job>; not $HOME (small)
+    max: { cores: 12, gpus: 1, walltime: "08:00:00" }
+    auto_approve_below: { cores: 32, hours: 4 }   # only identical reruns of jobs you approved
   uncc-hpc:
-    host: "<login-node>"
+    host: "hpc-uncc"
     scheduler: slurm
     account: "<allocation>"
     partitions: ["<allowed>"]
+    scratch: "/scratch/USER"
     max: { nodes: 8, walltime: "12:00:00" }
     auto_approve_below: { node_hours: 4 }
   bebop:
-    host: "<login-node>"
+    host: "bebop"
     scheduler: slurm     # or pbs
     account: "<allocation>"
     partitions: ["<allowed>"]
+    scratch: "/scratch/USER"
     max: { nodes: 4, walltime: "04:00:00" }
     doe: true            # Tier 0 only; never auto-approve
-    paths: { allowed_prefixes: ["<project dir>", "<scratch dir>"] }
+    paths: { allowed_prefixes: ["/project/PROJECT", "/scratch/USER"] }

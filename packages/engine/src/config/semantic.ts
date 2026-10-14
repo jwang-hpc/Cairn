@@ -47,8 +47,13 @@ export function crossFileProblems({ models, roles, machines, engine }: Configs):
     }
   }
 
-  // machines.yaml: DOE machines are Tier 0 only (DR-0006).
+  // machines.yaml: scratch inside the allowed prefixes; DOE machines are Tier 0 only (DR-0006).
   for (const [name, m] of Object.entries(machines.machines)) {
+    const prefixes = m.paths?.allowed_prefixes;
+    if (m.scratch && prefixes && !prefixes.some((p) => m.scratch === p.replace(/\/+$/, "") || m.scratch!.startsWith(`${p.replace(/\/+$/, "")}/`))) {
+      problems.push(`machines.yaml: machines.${name}.scratch: ${m.scratch} is not under paths.allowed_prefixes`);
+    }
+    if (m.scratch?.split("/").includes("..")) problems.push(`machines.yaml: machines.${name}.scratch: must not contain '..'`);
     if (!m.doe) continue;
     if (m.auto_approve_below) {
       problems.push(`machines.yaml: machines.${name}.auto_approve_below: DOE machines are never auto-approved (DR-0006)`);

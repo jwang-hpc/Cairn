@@ -120,13 +120,23 @@ export const RolesConfig = Type.Object(
 
 export const MachineConfig = Type.Object(
   {
+    /** ~/.ssh/config alias, not a raw hostname (DR-0006 amendment). */
     host: NonEmpty,
     scheduler: Type.Union([Type.Literal("none"), Type.Literal("slurm"), Type.Literal("pbs")]),
     account: Type.Optional(NonEmpty),
     partitions: Type.Optional(Type.Array(NonEmpty)),
+    /** Remote root for job directories (<scratch>/cairn/<project>/<job>); absolute, not $HOME (spike 4 F4). */
+    scratch: Type.Optional(Type.String({ pattern: "^/[A-Za-z0-9._/-]+$" })),
     max: Type.Optional(
       Type.Object(
-        { nodes: Type.Optional(PositiveInt), walltime: Type.Optional(Type.String({ pattern: "^\\d{1,3}:[0-5]\\d:[0-5]\\d$" })) },
+        {
+          nodes: Type.Optional(PositiveInt),
+          /** Cores per node. */
+          cores: Type.Optional(PositiveInt),
+          /** GPUs per node. */
+          gpus: Type.Optional(Type.Integer({ minimum: 0 })),
+          walltime: Type.Optional(Type.String({ pattern: "^\\d{1,3}:[0-5]\\d:[0-5]\\d$" })),
+        },
         strict,
       ),
     ),

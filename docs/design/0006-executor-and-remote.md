@@ -47,3 +47,19 @@ Same executor interface; thresholds may allow auto-approval for small jobs.
 - **Workstation has no scheduler:** `jobs.submit` there needs a runner (e.g. `systemd-run --user` or a
   detached wrapper) and a configured scratch path (`$HOME` is small).
 - **`config/machines.yaml` holds `~/.ssh/config` aliases,** not raw hostnames.
+
+## Amendment (2026-10-14): M5 job format and policy
+- **Job files:** `experiments/EXP-NNN/job.json` (manifest: `script`, `resources` {nodes, cores per node,
+  tasks_per_node, gpus, memory_gb, walltime, partition}, `outputs`) plus the script and any helper files in that
+  directory (≤ 100 files, ≤ 1 MiB each, ≤ 4 MiB total). Scripts carry no `#SBATCH`/`#PBS` lines: the executor
+  writes the header from the manifest and `machines.yaml` (fixed account, allowed partition).
+- **Remote layout:** `<scratch>/cairn/<project>/<job-id>/`; `scratch` is a new `machines.yaml` field (absolute,
+  inside `paths.allowed_prefixes` when those are set). Limits gain `max.cores` and `max.gpus` (per node).
+- **Lint** is exact for resources and heuristic for scripts (shell files only): it refuses remote access, privilege
+  changes, persistence, detaching (`nohup`, `setsid`, `tmux`), nested submission, download-and-run, `..` paths,
+  destructive commands on paths outside the job directory, and absolute paths outside the machine's project/scratch
+  areas, and any file (any language) that names a credential location (`.ssh`, `id_ed25519`, `.aws/credentials`,
+  ...); network use, installs, background processes, `eval`, and `$HOME` are warnings shown on the card.
+- **Auto-approval** additionally requires an exact rerun (same file fingerprint) of a job the user approved before,
+  and no lint warnings. Every new script is approved by a human once; the "approved template" of step 3 is that
+  earlier job.
