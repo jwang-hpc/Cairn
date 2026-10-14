@@ -67,6 +67,8 @@
     addresses come from each container's random MAC and bridge names are dynamic, so a static pf rule can't target
     them without also hitting other VMs. Next: disable IPv6 inside agent VMs, or pin agent MACs so pf can match
     their EUI-64 link-local range. Needed before M7.
+    **IPv6 fix (2026-10-14):** agents boot with `ipv6.disable=1` (`container run --kernel-arg`), required by the
+    launcher's allowlist; escape 4c now asserts no IPv6 in the agent. Pending: an escape run.
 13. (New, M5) Workstation jobs and session lifetime. The workstation runner starts each job detached
     (`nohup`, own process group via perl `setpgrp`), so it should outlive the SSH channel that started it. If
     the workstation's systemd-logind has `KillUserProcesses=yes`, closing the ControlMaster (or `ControlPersist`

@@ -107,6 +107,7 @@ describe("toRunArgv / validateRunArgv", () => {
   it("emits a hardened, fully allowlisted argv", () => {
     expect(argv.slice(0, 2)).toEqual(["run", "-d"]);
     for (const f of ["--read-only", "--no-dns", "--init"]) expect(argv).toContain(f);
+    expect(argv.join(" ")).toContain("--kernel-arg ipv6.disable=1");
     expect(argv.join(" ")).toContain("--cap-drop ALL --user 1000:1000");
     expect(argv.join(" ")).toContain("--mount type=bind,source=/Users/x/Cairn/skills,target=/skills,readonly");
     expect(argv.slice(-4)).toEqual(["--entrypoint", "sleep", "ghcr.io/example/agent@sha256:abc", "infinity"]);
@@ -135,6 +136,8 @@ describe("toRunArgv / validateRunArgv", () => {
     ["--flag=value form", ["--network=default"], /use '--network <value>'/],
     ["second network", ["--network", "default"], /must be the agent's network/],
     ["root user", ["--user", "0:0"], /agents run as 1000:1000/],
+    ["other kernel argument", ["--kernel-arg", "init=/bin/sh"], /--kernel-arg init=\/bin\/sh is not allowed \(only ipv6.disable=1\)/],
+    ["custom kernel", ["--kernel", "/tmp/vmlinux"], /--kernel is not allowed: custom kernel/],
   ])("refuses %s", (_name, extra, msg) => {
     expect(tamper(beforeImage(extra as string[]))).toThrow(msg);
   });
@@ -143,6 +146,7 @@ describe("toRunArgv / validateRunArgv", () => {
     for (const f of ["--read-only", "--no-dns"]) {
       expect(tamper((a) => a.filter((t) => t !== f))).toThrow(`missing required hardening flag ${f}`);
     }
+    expect(tamper((a) => a.filter((t, i) => t !== "--kernel-arg" && a[i - 1] !== "--kernel-arg"))).toThrow("missing required hardening flag --kernel-arg");
     expect(tamper((a) => [...a.slice(0, -1), "sh", "-c", "curl evil"])).toThrow(/must be 'sleep infinity'/);
     expect(tamper((a) => a.map((t) => (t === "sleep" ? "sh" : t)))).toThrow(/entrypoint must be sleep/);
   });

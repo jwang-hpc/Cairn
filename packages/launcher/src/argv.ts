@@ -24,7 +24,6 @@ const KNOWN_DANGEROUS: Record<string, string> = {
   "--publish": "publishes ports",
   "-k": "custom kernel",
   "--kernel": "custom kernel",
-  "--kernel-arg": "custom kernel arguments",
   "--init-image": "custom init image",
   "--runtime": "custom runtime",
   "--dns": "agents get no DNS (--no-dns)",
@@ -32,6 +31,12 @@ const KNOWN_DANGEROUS: Record<string, string> = {
   "--read-only-path": "can clear default read-only paths",
   "--rosetta": "not needed",
 };
+
+/**
+ * Kernel boot arguments every agent VM gets, and the only ones allowed. ipv6.disable=1: no IPv6 in the agent, so no
+ * link-local path to services on the Mac that the IPv4 pf guard can't see (open question 12, escape test 4c).
+ */
+export const AGENT_KERNEL_ARGS = ["ipv6.disable=1"] as const;
 
 export interface ArgvPolicy {
   /** Host directories mount sources must lie under (worktree, skills, outbox). */
@@ -72,6 +77,7 @@ export function toRunArgv(spec: ContainerSpec, policy: ArgvPolicy): string[] {
     ...Object.entries(spec.labels).flatMap(([k, v]) => ["--label", `${k}=${v}`]),
     "--read-only", "--tmpfs", "/tmp", "--cap-drop", "ALL", "--user", spec.user,
     "--no-dns", "--network", spec.network, "--init",
+    ...AGENT_KERNEL_ARGS.flatMap((a) => ["--kernel-arg", a]),
     "-w", spec.workdir,
     "--cpus", String(spec.resources.cpus), "--memory", spec.resources.memory,
     ...spec.mounts.flatMap((m) => ["--mount", `type=bind,source=${m.source},target=${m.target}${m.readonly ? ",readonly" : ""}`]),
@@ -163,6 +169,11 @@ export function validateRunArgv(argv: readonly string[], policy: ArgvPolicy): vo
         if (!ENV_ALLOWED.has(k)) throw new UnsafeArgvError(`environment variable ${k} is not allowed in agent containers`);
         break;
       }
+      case "--kernel-arg": {
+        const a = next(flag);
+        if (!(AGENT_KERNEL_ARGS as readonly string[]).includes(a)) throw new UnsafeArgvError(`--kernel-arg ${a} is not allowed (only ${AGENT_KERNEL_ARGS.join(", ")})`);
+        break;
+      }
       case "--entrypoint":
         if (next(flag) !== "sleep") throw new UnsafeArgvError("entrypoint must be sleep (tools run via exec)");
         break;
@@ -174,7 +185,7 @@ export function validateRunArgv(argv: readonly string[], policy: ArgvPolicy): vo
   if (!image) throw new UnsafeArgvError("missing image");
   const args = argv.slice(i + 1);
   if (args.length !== 1 || args[0] !== "infinity") throw new UnsafeArgvError(`container command must be 'sleep infinity', got ${JSON.stringify(args)}`);
-  for (const required of ["--read-only", "--cap-drop", "--no-dns", "--network", "--tmpfs"]) {
+  for (const required of ["--read-only", "--cap-drop", "--no-dns", "--network", "--tmpfs", "--kernel-arg"]) {
     if (!seen.has(required)) throw new UnsafeArgvError(`missing required hardening flag ${required}`);
   }
   if (!seen.has("--user") && !seen.has("-u")) throw new UnsafeArgvError("missing --user (agents never run as root)");
