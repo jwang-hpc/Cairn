@@ -20,3 +20,18 @@ export { printable, renderCard } from "./jobs/card.js";
 export { describeFiles, fingerprint, JobError, JobStore, snapshotExperiment } from "./jobs/store.js";
 export { type JobLedger, JobService, type JobServiceOptions, type SubmitRequest } from "./jobs/service.js";
 export { createExecutorEndpoint, createJobsMcp, describeJob, type ExecutorSession, JOB_TOOLS, type JobTool, type JobsMcp } from "./mcp/jobs.js";
+export { LitError, LitHttp, type LitHttpOptions, type LitService, SERVICE_HOSTS } from "./literature/net.js";
+export {
+  bibValue,
+  citekey,
+  LIT_SOURCES,
+  type LitSource,
+  mergeRecords,
+  normArxiv,
+  normDoi,
+  type PaperIds,
+  type PaperRecord,
+  titleSimilarity,
+  toBibtex,
+} from "./literature/records.js";
+export { LiteratureService, parsePaperId, type Resolution, type ResolveInput, type SearchResult, type SourceStatus } from "./literature/service.js";

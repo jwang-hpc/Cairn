@@ -16,3 +16,5 @@ agent:                  # agent sandboxes (DR-0005)
   image: cairn-agent:dev   # built by containers/agent/build.sh; pin by digest when published
   max_minutes: 15          # wall-clock limit per worker run
 # projects_dir: ~/Research   # where research projects live (one git repo each); default: <engine home>/projects
+# literature:
+#   contact_email: you@university.edu   # sent only to OpenAlex and Crossref (polite pool); re literature contact <email>
