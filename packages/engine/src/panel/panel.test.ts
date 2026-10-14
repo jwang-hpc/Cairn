@@ -235,3 +235,35 @@ describe("relay, debate, redteam (DR-0008)", () => {
     );
   });
 });
+
+describe("re panel (CLI)", () => {
+  it("run → list → show (blind) → judge (unblinded) → replay", async () => {
+    const { runCli } = await import("../cli.js");
+    await setup();
+    const { writeFile, mkdir } = await import("node:fs/promises");
+    await mkdir(engine.paths.home, { recursive: true });
+    await writeFile(join(engine.paths.home, "state.json"), JSON.stringify({ project: "p" }));
+    (engine.config.engine as { projects_dir?: string }).projects_dir = base;
+    const re = async (...argv: string[]) => {
+      const out: string[] = [];
+      const err: string[] = [];
+      const code = await runCli(argv, { out: (l) => out.push(l), err: (l) => err.push(l) }, { openEngine: async () => engine, env: {} });
+      return { code, out: out.join("\n"), err: err.join("\n") };
+    };
+    const run = await re("panel", "run", "--question", "Pursue HY01?", "--hypothesis", "HY01", "--rounds", "independent,critique,synthesis", "--members", "acme-m@high,beta-m@high", "--synth", "acme-big@high");
+    expect(run.code).toBe(0);
+    const id = /^panel (\S+)/.exec(run.out)![1]!;
+    expect(run.out).toContain("round 2 critique: Model A ok; Model B ok");
+    expect(run.out).toMatch(/5 model calls/);
+    expect((await re("panel", "list")).out).toMatch(new RegExp(`^${id}  independent→critique→synthesis\\s+HY01  blind  Pursue HY01\\?`));
+    expect((await re("panel", "show", id)).out).toContain("(blind until `re panel judge`)");
+    const judged = await re("panel", "judge", id, "--prefer", "B", "--note", "better risks");
+    expect(judged.out).toMatch(/Model A = (acme-m|beta-m)/);
+    expect((await re("panel", "replay", id)).out).toContain("prefer Model B · better risks");
+    expect(await re("panel", "run", "--members", "acme-m@high")).toMatchObject({ code: 2, err: expect.stringContaining("--question is required") });
+    // An unknown hypothesis is a user error, reported before anything is written or any model is called.
+    const panels = (await re("panel", "list")).out;
+    expect(await re("panel", "run", "--question", "Q", "--hypothesis", "HY99", "--rounds", "independent", "--members", "acme-m@high,beta-m@high")).toMatchObject({ code: 1, err: expect.stringContaining("unknown hypothesis HY99") });
+    expect((await re("panel", "list")).out).toBe(panels);
+  });
+});

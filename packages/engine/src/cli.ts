@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { ConfigError } from "./config/load.js";
 import { LEDGER_COMMANDS, LEDGER_OPTIONS, LEDGER_USAGE, runLedgerCommand } from "./ledger/commands.js";
+import { PANEL_OPTIONS, PANEL_USAGE, runPanelCommand } from "./panel/commands.js";
 import { Engine, type LoginIo, type Status } from "./engine.js";
 import { type EnginePaths, REPO_ROOT, resolvePaths } from "./paths.js";
 import type { WorkerDeps } from "./worker/run.js";
@@ -41,6 +42,8 @@ commands:
 
 ${LEDGER_USAGE}
 
+${PANEL_USAGE}
+
 options:
   --version   print engine version
 
@@ -68,6 +71,7 @@ export async function runCli(argv: readonly string[], io: CliIo, deps: CliDeps =
         task: { type: "string" },
         keep: { type: "boolean" },
         ...LEDGER_OPTIONS,
+        ...PANEL_OPTIONS,
       },
       allowPositionals: true,
       strict: true,
@@ -88,7 +92,7 @@ export async function runCli(argv: readonly string[], io: CliIo, deps: CliDeps =
     io.out(USAGE);
     return 0;
   }
-  if (![...["status", "ask", "run", "login"], ...LEDGER_COMMANDS].includes(command)) {
+  if (![...["status", "ask", "run", "login", "panel"], ...LEDGER_COMMANDS].includes(command)) {
     io.err(`re: unknown command '${command}'`);
     io.err(USAGE);
     return 2;
@@ -106,6 +110,7 @@ export async function runCli(argv: readonly string[], io: CliIo, deps: CliDeps =
     throw e;
   }
 
+  if (command === "panel") return runPanelCommand(engine, rest, v, io, deps.env ?? process.env);
   if ((LEDGER_COMMANDS as readonly string[]).includes(command)) {
     return runLedgerCommand(engine, command, rest, v, io, deps.env ?? process.env);
   }

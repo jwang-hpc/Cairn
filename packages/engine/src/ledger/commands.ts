@@ -81,7 +81,7 @@ async function writeState(engine: Engine, state: { project: string }): Promise<v
   await writeFile(statePath(engine), JSON.stringify(state));
 }
 
-async function currentProject(engine: Engine, v: Values, env: NodeJS.ProcessEnv): Promise<Ledger> {
+export async function openCurrentProject(engine: Engine, v: Values, env: NodeJS.ProcessEnv): Promise<Ledger> {
   const name = (v.project as string | undefined) ?? env.CAIRN_PROJECT ?? (await readState(engine)).project;
   if (!name) throw new LedgerError("no project selected: pass --project <name>, set CAIRN_PROJECT, or run `re project use <name>`");
   return Ledger.open(join(projectsDir(engine), name));
@@ -154,14 +154,14 @@ async function dispatch(engine: Engine, command: string, args: string[], v: Valu
         return 0;
       }
       if (sub === undefined) {
-        const l = await currentProject(engine, v, env);
+        const l = await openCurrentProject(engine, v, env);
         io.out(`${l.name}  [${l.dataClass}]  ${l.dir}`);
         return 0;
       }
       throw new UsageError(`unknown subcommand '${sub}'\n${LEDGER_USAGE}`);
     }
     case "hypothesis": {
-      const l = await currentProject(engine, v, env);
+      const l = await openCurrentProject(engine, v, env);
       if (sub === "add") {
         need(v, ["title", "statement", "prediction", "falsification", "baseline", "experiment", "kill"], "hypothesis add --title ... (see re help)");
         const r = await l.addHypothesis(
@@ -195,7 +195,7 @@ async function dispatch(engine: Engine, command: string, args: string[], v: Valu
       if (sub !== "add") throw new UsageError(`usage: re trace add <${Object.keys(TRACE_TYPES).filter((t) => t !== "dead_end").join("|")}> ...`);
       const type = TRACE_TYPES[rest[0] ?? ""];
       if (!type) throw new UsageError(`node type must be one of ${NODE_TYPES.join(", ").replace("dead_end", "dead-end")}`);
-      const l = await currentProject(engine, v, env);
+      const l = await openCurrentProject(engine, v, env);
       const base = { type, title: v.title as string, ...(v.parent ? { parent: v.parent as string } : {}), ...(v.depends ? { also_depends_on: list(v.depends as string) } : {}) };
       const fields: Record<NodeType, () => NodeInput> = {
         question: () => (need(v, ["title", "description"], "trace add question --title T --description D"), { ...base, description: v.description as string, status: "open" }),
@@ -212,19 +212,19 @@ async function dispatch(engine: Engine, command: string, args: string[], v: Valu
       return 0;
     }
     case "tree": {
-      io.out(await (await currentProject(engine, v, env)).renderTree());
+      io.out(await (await openCurrentProject(engine, v, env)).renderTree());
       return 0;
     }
     case "decision": {
       if (sub !== "add") throw new UsageError("usage: re decision add --title T [--refs R] [--note N]");
       need(v, ["title"], "decision add --title T");
-      const id = await (await currentProject(engine, v, env)).addDecision(v.title as string, user, list(v.refs as string), v.note as string | undefined);
+      const id = await (await openCurrentProject(engine, v, env)).addDecision(v.title as string, user, list(v.refs as string), v.note as string | undefined);
       io.out(`added ${id}`);
       return 0;
     }
     case "ledger": {
       if (sub !== "check") throw new UsageError("usage: re ledger check");
-      const r = await (await currentProject(engine, v, env)).check();
+      const r = await (await openCurrentProject(engine, v, env)).check();
       if (r.ok) io.out(`ok: ${r.writes} ledger writes, ${r.commits} commits, all tagged`);
       for (const p of r.problems) io.out(`problem: ${p}`);
       return r.ok ? 0 : 1;
