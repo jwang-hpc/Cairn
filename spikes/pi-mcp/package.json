@@ -1,0 +1,15 @@
+{
+  "name": "spike-pi-mcp",
+  "private": true,
+  "type": "module",
+  "description": "M0 spike 2: pi-mcp client <-> stub executor MCP server over Streamable HTTP with a bearer token. Throwaway.",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "1.2.0",
+    "@earendil-works/pi-ai": "1.2.0",
+    "@earendil-works/pi-mcp": "1.2.0",
+    "@modelcontextprotocol/sdk": "1.31.0"
+  }
+}
