@@ -64,3 +64,20 @@ K-Dense-AI/scientific-agent-skills, K-Dense-AI/claude-scientific-writer) before 
   - **Engine features:** keep short per-task branches; unfinished features behind config flags on `main`.
   - **"Production":** tag releases (`v0.x`); the workstation's headless engine and the app run a tag.
 - Needs: user approval per source (new network fetch, licenses); after M3 so trials run against a ledger.
+
+## Data class in the app
+*Requested 2026-10-14.* Most projects use open science data, but the user should say so explicitly instead of
+the app assuming it (the CLI already does; DR-0013 amendment).
+- Fits: M8 (the new-project dialog and the project header).
+- Shape: the new-project dialog has a required choice, with no preselected option. Each option has one plain line:
+  - **open**: public or open-science datasets, code, and results;
+  - **not public yet**: the user's unpublished results, code, or drafts;
+  - **restricted**: e.g. DOE or export-controlled data, or data under an agreement.
+
+  The project header shows the class. Changing it later is a recorded decision (`engine/decisions.md`); it is
+  never edited silently. The engine API gains `POST /api/projects` with a required `data_class`.
+- Decide: whether `restricted` projects may send literature search queries to the public scholarly APIs. The
+  queries are short keyword strings, not project data, but they can reveal what a project is about. Options:
+  - allowed, as for every other class (today's behaviour);
+  - off for `restricted` unless the user allows it for that project (asked in the same dialog);
+  - an allowlist of data classes for the literature services in engine.yaml, like the one for model providers.

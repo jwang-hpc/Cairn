@@ -6,7 +6,7 @@ cd "$(dirname "$0")/.."
 re() { node packages/engine/dist/bin.js "$@"; }
 DIR="$(node -e 'import("./packages/engine/dist/paths.js").then(m=>console.log(m.resolvePaths().home))')/projects/m3-demo"
 rm -rf "$DIR"
-re project new m3-demo --title "Error-bounded compression for HPC checkpoints"
+re project new m3-demo --title "Error-bounded compression for HPC checkpoints" --data-class unpublished
 re hypothesis add --title "SZ3 cuts checkpoint time at scale" \
   --statement "Error-bounded lossy compression (SZ3, 1e-3 rel) reduces checkpoint write time on Lustre." \
   --prediction "At least 3x lower write time at 512 nodes." \
