@@ -84,6 +84,25 @@ export function titleSimilarity(a: string, b: string): number {
   return both / (A.size + B.size - both);
 }
 
+/** A first author's surname, ASCII-folded: "Liang, Xin" and "Xin Liang" are both "liang". */
+export const surname = (a: string) =>
+  (a.includes(",") ? a.split(",")[0]! : (a.trim().split(/\s+/).at(-1) ?? a))
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z]/g, "");
+
+/**
+ * A preprint and a published record are the same paper unless they differ substantially: the title (similarity
+ * below 0.9) or the first author. Added or reordered later authors don't count.
+ */
+export function samePaper(a: PaperRecord, b: PaperRecord): boolean {
+  if (titleSimilarity(a.title, b.title) < 0.9) return false;
+  const fa = a.authors[0];
+  const fb = b.authors[0];
+  return !fa || !fb || surname(fa) === surname(fb);
+}
+
 /** Dedupe key: DOI > arXiv id > Semantic Scholar id > title + year. */
 export function recordKey(r: PaperRecord): string {
   if (r.ids.doi) return `doi:${r.ids.doi}`;

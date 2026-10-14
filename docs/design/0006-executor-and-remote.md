@@ -116,6 +116,16 @@ Same executor interface; thresholds may allow auto-approval for small jobs.
   DR-0009 (missing sections are a warning). Each paper note also carries `relevance: 0-10`: the agent's judgement of
   the paper against the project's problem, using the rubric in the `literature-review` skill. A malformed score fails
   the check; a missing one is a warning. `re literature notes [<branch>]` lists the notes, most relevant first.
+- **Preprints:** a preprint and its publication are one reference: the publication, with the arXiv id as its
+  `eprint`. That's what goes into a submission's bibliography.
+  - `resolve` on an arXiv id whose record names a registered journal DOI returns the publication.
+  - `resolve` on a DOI keeps a preprint the publisher names (Crossref `has-preprint`) only after arXiv confirms
+    it.
+  - `check` warns about pairs left in `refs.bib` (same eprint, or same title and first author). `accept` merges
+    them automatically and reports it: the preprint entry goes, its citations are rewritten, and its note becomes
+    the publication's (or is dropped if the publication has one). The merged result is checked again before it is
+    written.
+  - Pairs that differ substantially (title similarity below 0.9, or a different first author) stay separate works.
 - **Accept:** `re literature accept <branch>` runs the check, then writes the checked files as one ledger commit
   tagged `ai-suggested(<model>, <effort>)`, taken from the run's usage record via the commit's `Cairn-Run` trailer.
   It is refused if `lit/` changed in the project since the branch started, or if the branch deletes or symlinks

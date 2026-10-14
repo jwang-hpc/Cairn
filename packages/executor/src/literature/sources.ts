@@ -1,7 +1,7 @@
 // Source adapters (M7): Semantic Scholar, OpenAlex, arXiv, Crossref, and doi.org's handle API. Each turns one API's
 // response into PaperRecords. URLs are built only from fixed bases and validated ids or query strings.
 import { type LitHttp, LitError } from "./net.js";
-import { ABSTRACT_MAX, clip, decodeEntities, type LitSource, normArxiv, normDoi, type PaperRecord, plain } from "./records.js";
+import { ABSTRACT_MAX, arxivFromDoi, clip, decodeEntities, type LitSource, normArxiv, normDoi, type PaperRecord, plain } from "./records.js";
 
 export interface SearchOptions {
   limit: number;
@@ -238,27 +238,35 @@ export const arxiv = (http: LitHttp) => ({
 // ---------- Crossref ----------
 
 const CR = "https://api.crossref.org/works";
-const CR_SELECT = "DOI,title,author,issued,container-title,type,abstract,is-referenced-by-count";
+const CR_SELECT = "DOI,title,subtitle,author,issued,container-title,type,abstract,is-referenced-by-count,relation";
 
 interface CRWork {
   DOI?: string;
   title?: string[];
+  /** ACM and others split "cuSZ: An Efficient ..." into title "cuSZ" and this. */
+  subtitle?: string[];
   author?: { given?: string; family?: string; name?: string }[];
   issued?: { "date-parts"?: (number | null)[][] };
   "container-title"?: string[];
   type?: string;
   abstract?: string;
   "is-referenced-by-count"?: number;
+  /** e.g. {"has-preprint": [{"id-type": "doi", "id": "10.48550/arXiv.2304.11768"}]}: asserted by the publisher, unverified. */
+  relation?: Record<string, { "id-type"?: string; id?: string }[] | undefined>;
 }
 
 export function fromCrossref(w: CRWork): PaperRecord | undefined {
   const doi = normDoi(w.DOI);
-  const title = plain(w.title?.[0]);
+  const main = plain(w.title?.[0]);
+  const sub = plain(w.subtitle?.[0]);
+  const title = sub && !main.toLowerCase().includes(sub.toLowerCase()) ? `${main}: ${sub}` : main;
   if (!doi || !title) return undefined;
   const year = w.issued?.["date-parts"]?.[0]?.[0];
   const venue = w["container-title"]?.[0];
+  // A preprint the publisher names: only an arXiv DOI, and only a candidate (resolve verifies it against arXiv).
+  const preprint = (w.relation?.["has-preprint"] ?? []).map((r) => (r["id-type"] === "doi" ? arxivFromDoi(normDoi(r.id)) : undefined)).find(Boolean);
   return {
-    ids: { doi },
+    ids: { doi, ...(preprint ? { arxiv: preprint } : {}) },
     title,
     authors: (w.author ?? []).map((a) => plain(a.family ? `${a.family}, ${a.given ?? ""}`.replace(/, $/, "") : a.name)).filter(Boolean),
     ...(year ? { year } : {}),

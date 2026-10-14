@@ -86,6 +86,8 @@ Acceptance: related-work note set for a known topic, every citation resolvable.
   - M7.3 per-paper notes and the `literature-review` skill; overrides of the six PiPilot skills that used
     `literature-search`; `re literature check` and `accept`.
   - Paper notes carry a 0-10 relevance score; `re literature notes` lists them, most relevant first.
+  - A preprint and its publication are one reference: `resolve` prefers the publication, and `accept` merges
+    leftover pairs.
 - DBLP is deferred: it answered with a bot-check page. Google Scholar is link-out only.
 - Open: whether `restricted` projects may send search queries to these public APIs.
 

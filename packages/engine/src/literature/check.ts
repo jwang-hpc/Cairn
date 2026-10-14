@@ -2,7 +2,7 @@
 // the services (resolutions.jsonl is provenance only: the agent can write it), must look exactly like what
 // literature.resolve writes (plain-text values, known fields), and every citation in the notes must be in
 // refs.bib. Per-paper notes (frontmatter `paper:`) are lit/notes/<citekey>.md and name the work their entry names.
-import { type LiteratureService, normArxiv, normDoi, type PaperRecord, titleSimilarity } from "@cairn/executor";
+import { type LiteratureService, normArxiv, normDoi, type PaperRecord, surname as surnameOf, titleSimilarity } from "@cairn/executor";
 import { parseDocument } from "yaml";
 
 export interface BibEntry {
@@ -10,6 +10,9 @@ export interface BibEntry {
   key: string;
   fields: Record<string, string>;
   line: number;
+  /** Offsets of the entry in the text: [start, end). */
+  start: number;
+  end: number;
 }
 
 /** BibTeX as literature.resolve writes it (and anything a hand might add): @type{key, field = {v} | "v" | 123, …}. */
@@ -72,7 +75,7 @@ export function parseBibtex(text: string): { entries: BibEntry[]; errors: string
       i = start + 1;
       continue;
     }
-    entries.push({ type: head[1]!.toLowerCase(), key: head[2]!, fields, line: lineAt(start) });
+    entries.push({ type: head[1]!.toLowerCase(), key: head[2]!, fields, line: lineAt(start), start, end: p });
     i = p;
   }
   return { entries, errors };
@@ -96,12 +99,29 @@ const FIELDS = new Set(["title", "author", "year", "journal", "booktitle", "doi"
 const TYPES = new Set(["article", "inproceedings", "misc"]);
 /** What bibValue() can produce: plain text with TeX specials escaped. Nothing else may carry a backslash or brace. */
 const plainValue = (v: string) => !/[\\{}]/.test(v.replace(/\\[%&$#_]|\\\^\{\}|\\~\{\}/g, ""));
-const surname = (a: string) =>
-  (a.includes(",") ? a.split(",")[0]! : (a.trim().split(/\s+/).at(-1) ?? a))
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z]/g, "");
+const surname = surnameOf;
+const titleOf = (e: BibEntry) => (e.fields.title ?? "").replace(/^\{([\s\S]*)\}$/, "$1");
+const firstAuthor = (e: BibEntry) => e.fields.author?.split(/\s+and\s+/)[0];
+
+/**
+ * Preprint/publication pairs in one refs.bib: an arXiv-only entry and a DOI entry for the same paper (the same eprint,
+ * or the same title and first author; see samePaper). They are one reference, the publication's.
+ */
+export function preprintPairs(entries: BibEntry[]): { preprint: BibEntry; published: BibEntry }[] {
+  const pairs: { preprint: BibEntry; published: BibEntry }[] = [];
+  for (const pre of entries.filter((e) => e.fields.eprint && !e.fields.doi)) {
+    const a = normArxiv(pre.fields.eprint);
+    const pub = entries.find((d) => {
+      if (!d.fields.doi || d === pre) return false;
+      if (a && normArxiv(d.fields.eprint) === a) return true;
+      const fa = firstAuthor(pre);
+      const fd = firstAuthor(d);
+      return titleSimilarity(titleOf(pre), titleOf(d)) >= 0.9 && (!fa || !fd || surname(fa) === surname(fd));
+    });
+    if (pub) pairs.push({ preprint: pre, published: pub });
+  }
+  return pairs;
+}
 
 export interface LitFiles {
   refs: string;
@@ -200,6 +220,10 @@ export async function checkLiterature(files: LitFiles, lit: LiteratureService): 
     if (!logged.has(e.key)) warn(where, "verified, but not in lit/resolutions.jsonl (not added through literature.resolve)");
   }
 
+  for (const { preprint, published } of preprintPairs(entries)) {
+    warn(`lit/refs.bib:${preprint.line} ${preprint.key}`, `the arXiv preprint of ${published.key} (same paper): cite ${published.key}; re literature accept merges them`);
+  }
+
   // Notes: every citation in refs.bib; per-paper notes named after their entry and naming the same work.
   let citations = 0;
   const cited = new Set<string>();
@@ -274,4 +298,71 @@ export function paperNotes(notes: LitFiles["notes"]): PaperNote[] {
     });
   }
   return out.sort((a, b) => (b.relevance ?? -1) - (a.relevance ?? -1) || a.key.localeCompare(b.key));
+}
+
+export interface PreprintMerge {
+  from: string;
+  into: string;
+  /** Citations rewritten from [@from] to [@into]. */
+  citations: number;
+  /** What happened to lit/notes/<from>.md. */
+  note: "renamed" | "dropped" | "none";
+}
+
+const citeOf = (key: string) => new RegExp(`(^|[\\s;[(-])@${key}(?![A-Za-z0-9_]|[:.-][A-Za-z0-9])`, "g");
+
+/**
+ * Merges each preprint/publication pair into the publication (the user's rule: one reference per paper, for
+ * submission too): the preprint's entry goes, the publication keeps the arXiv id as its eprint, citations of the
+ * preprint's key are rewritten, and the preprint's note becomes the publication's (or is dropped if the publication
+ * has one). Returns the new files and the note paths that no longer exist.
+ */
+export function mergePreprints(files: LitFiles, now = new Date()): { files: LitFiles; merges: PreprintMerge[]; removed: string[] } {
+  const { entries } = parseBibtex(files.refs);
+  const pairs = preprintPairs(entries);
+  if (pairs.length === 0) return { files, merges: [], removed: [] };
+  // refs.bib: edit from the end so earlier offsets stay valid.
+  const edits: { start: number; end: number; text: string }[] = [];
+  for (const { preprint, published } of pairs) {
+    const end = files.refs.slice(preprint.end).match(/^\s*/)![0].length + preprint.end;
+    edits.push({ start: preprint.start, end, text: "" });
+    if (!published.fields.eprint) {
+      const body = files.refs.slice(published.start, published.end);
+      const close = body.lastIndexOf("}");
+      const before = body.slice(0, close).replace(/[\s,]*$/, "");
+      edits.push({ start: published.start, end: published.end, text: `${before},\n  eprint = {${normArxiv(preprint.fields.eprint)}},\n  archivePrefix = {arXiv}\n}` });
+    }
+  }
+  let refs = files.refs;
+  for (const e of edits.sort((a, b) => b.start - a.start)) refs = refs.slice(0, e.start) + e.text + refs.slice(e.end);
+
+  const merges: PreprintMerge[] = [];
+  const removed: string[] = [];
+  let notes = files.notes.map((n) => ({ ...n }));
+  for (const { preprint, published } of pairs) {
+    let citations = 0;
+    for (const n of notes) {
+      n.text = n.text.replace(citeOf(preprint.key), (_m, lead: string) => (citations++, `${lead}@${published.key}`));
+      n.text = n.text.replace(/\\cite([pt]?\*?)\{([^}]*)\}/g, (_m, v: string, keys: string) =>
+        `\\cite${v}{${keys.split(",").map((k) => (k.trim() === preprint.key ? (citations++, published.key) : k)).join(",")}}`,
+      );
+    }
+    const from = `lit/notes/${preprint.key}.md`;
+    const into = `lit/notes/${published.key}.md`;
+    let note: PreprintMerge["note"] = "none";
+    if (notes.some((n) => n.path === from)) {
+      if (notes.some((n) => n.path === into)) {
+        notes = notes.filter((n) => n.path !== from);
+        note = "dropped";
+      } else {
+        notes = notes.map((n) => (n.path === from ? { path: into, text: n.text.replace(/^paper:.*$/m, `paper: doi:${normDoi(published.fields.doi)}`) } : n));
+        note = "renamed";
+      }
+      removed.push(from);
+    }
+    merges.push({ from: preprint.key, into: published.key, citations, note });
+  }
+  const log = merges.map((m) => JSON.stringify({ at: now.toISOString(), merged: m.from, into: m.into, by: "re literature accept" })).join("\n");
+  const resolutions = `${files.resolutions ?? ""}${files.resolutions && !files.resolutions.endsWith("\n") ? "\n" : ""}${log}\n`;
+  return { files: { refs, notes, resolutions }, merges, removed };
 }

@@ -44,6 +44,8 @@ export {
   normDoi,
   type PaperIds,
   type PaperRecord,
+  samePaper,
+  surname,
   titleSimilarity,
   toBibtex,
 } from "./literature/records.js";
