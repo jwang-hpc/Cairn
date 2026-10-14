@@ -3,6 +3,8 @@ import { EFFORT_LEVELS, type EffortLevel, FORMAT_VERSION } from "@cairn/shared";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { JobServiceOptions } from "@cairn/executor";
+import { createApi } from "./api/api.js";
+import { serveApi, type ServedApi } from "./api/serve.js";
 import { CLAIM_COMMANDS, CLAIM_OPTIONS, CLAIM_USAGE, runClaimCommand } from "./claims/commands.js";
 import { ConfigError } from "./config/load.js";
 import { EVIDENCE_COMMANDS, EVIDENCE_OPTIONS, EVIDENCE_USAGE, runEvidenceCommand } from "./evidence/commands.js";
@@ -35,6 +37,8 @@ export interface CliDeps {
   jobs?: Partial<JobServiceOptions>;
   /** Parser runner (tests run parsers on the host). */
   parsers?: ParserRunner;
+  /** `re serve` runs until this settles (default: SIGINT or SIGTERM). */
+  serveUntil?: (served: ServedApi) => Promise<unknown>;
 }
 
 const USAGE = `usage: re <command> [options]
@@ -49,6 +53,9 @@ commands:
                                         the current project); changes are committed to
                                         branch agent/<id> for review
   login <pi-provider> <oauth|api_key>   sign in or store an API key (run in your own terminal)
+  serve [--port N]                      local HTTP + SSE API for the desktop app, on 127.0.0.1 only
+                                        (default port: any free one); URL and bearer token go to
+                                        <home>/api.json (mode 0600, new token every start); Ctrl-C stops
   help                                  show this message
 
 ${LEDGER_USAGE}
@@ -87,6 +94,7 @@ export async function runCli(argv: readonly string[], io: CliIo, deps: CliDeps =
         repo: { type: "string" },
         task: { type: "string" },
         keep: { type: "boolean" },
+        port: { type: "string" },
         ...LEDGER_OPTIONS,
         ...PANEL_OPTIONS,
         ...JOB_OPTIONS,
@@ -112,7 +120,7 @@ export async function runCli(argv: readonly string[], io: CliIo, deps: CliDeps =
     io.out(USAGE);
     return 0;
   }
-  if (![...["status", "ask", "run", "login", "panel"], ...LEDGER_COMMANDS, ...JOB_COMMANDS, ...CLAIM_COMMANDS, ...EVIDENCE_COMMANDS].includes(command)) {
+  if (![...["status", "ask", "run", "login", "panel", "serve"], ...LEDGER_COMMANDS, ...JOB_COMMANDS, ...CLAIM_COMMANDS, ...EVIDENCE_COMMANDS].includes(command)) {
     io.err(`re: unknown command '${command}'`);
     io.err(USAGE);
     return 2;
@@ -141,6 +149,14 @@ export async function runCli(argv: readonly string[], io: CliIo, deps: CliDeps =
   switch (command) {
     case "status":
       return status(engine, io, v.check === true);
+    case "serve": {
+      const port = v.port === undefined ? 0 : Number(v.port);
+      if (!/^\d+$/.test(v.port ?? "0") || port > 65535) {
+        io.err("re serve: --port must be a port number (0-65535; 0 picks a free one)");
+        return 2;
+      }
+      return serve(engine, io, port, deps);
+    }
     case "ask": {
       const prompt = rest.join(" ").trim();
       if (prompt === "") {
@@ -206,6 +222,41 @@ export async function runCli(argv: readonly string[], io: CliIo, deps: CliDeps =
     }
   }
   return 2;
+}
+
+/** Until SIGINT or SIGTERM. */
+const untilSignal = () =>
+  new Promise<void>((resolve) => {
+    const stop = () => {
+      process.off("SIGINT", stop);
+      process.off("SIGTERM", stop);
+      resolve();
+    };
+    process.on("SIGINT", stop);
+    process.on("SIGTERM", stop);
+  });
+
+async function serve(engine: Engine, io: CliIo, port: number, deps: CliDeps): Promise<number> {
+  const api = createApi(engine, { env: deps.env ?? process.env, ...(deps.jobs ? { jobs: deps.jobs } : {}) });
+  let served: ServedApi;
+  try {
+    served = await serveApi(api, { port });
+  } catch (e) {
+    await api.close();
+    io.err(`re serve: ${(e as Error).message}`);
+    if (/EPERM|EACCES/.test((e as Error).message)) io.err("hint: binding a local port was refused; run re serve in your own terminal, not inside a sandbox");
+    return 1;
+  }
+  io.out(`engine API on ${served.url} (127.0.0.1 only; HTTP + SSE)`);
+  io.out(`url and token: ${served.infoPath} (mode 0600; the token changes every start)`);
+  io.err("stop with Ctrl-C");
+  try {
+    await (deps.serveUntil ?? untilSignal)(served);
+  } finally {
+    await served.close();
+  }
+  io.out("engine API stopped");
+  return 0;
 }
 
 async function run(

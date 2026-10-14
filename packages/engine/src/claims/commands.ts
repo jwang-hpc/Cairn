@@ -8,7 +8,7 @@ import { openCurrentProject } from "../ledger/commands.js";
 import { type Ledger, LedgerError } from "../ledger/ledger.js";
 import { parseDraft } from "./draft.js";
 import { ledgerReader } from "./reader.js";
-import type { EffortLevel } from "@cairn/shared";
+import type { EffortLevel, SupportReport } from "@cairn/shared";
 import { reviewDraft } from "./gate.js";
 import { renderReview } from "./review.js";
 import { checkSupport, renderReport } from "./support.js";
@@ -29,21 +29,41 @@ export const CLAIM_USAGE = `claim commands (nothing reaches logic/claims.md with
 
 type Values = Record<string, string | boolean | undefined>;
 
-const BRANCH_DRAFT = /^([A-Za-z0-9][A-Za-z0-9._/-]*):(staging\/claims\/[A-Za-z0-9._-]+\.md)$/;
+/** A draft committed on a branch of the project: <branch>:staging/claims/<name>.md. */
+export const BRANCH_DRAFT = /^([A-Za-z0-9][A-Za-z0-9._/-]*):(staging\/claims\/[A-Za-z0-9._-]+\.md)$/;
+
+/** A draft committed on a branch of the project (agent/<id>:staging/claims/x.md), read from git. */
+export async function readBranchDraft(ledger: Ledger, ref: string): Promise<string> {
+  const m = BRANCH_DRAFT.exec(ref);
+  if (!m) throw new LedgerError(`not a branch draft (want <branch>:staging/claims/<name>.md): ${ref}`);
+  try {
+    return await git(ledger.dir, ["show", `${m[1]}:${m[2]}`]);
+  } catch {
+    throw new LedgerError(`no ${m[2]} on branch ${m[1]} of ${ledger.name}`);
+  }
+}
 
 /** A draft file on disk, or one committed on a branch of the project (agent/<id>:staging/claims/x.md). */
 async function readDraft(ledger: Ledger, ref: string): Promise<string> {
   try {
     return await readFile(resolve(ref), "utf8");
   } catch (e) {
-    const m = BRANCH_DRAFT.exec(ref);
-    if (!m) throw new LedgerError(`cannot read ${ref}: ${(e as Error).message}`);
-    try {
-      return await git(ledger.dir, ["show", `${m[1]}:${m[2]}`]);
-    } catch {
-      throw new LedgerError(`no ${m[2]} on branch ${m[1]} of ${ledger.name}`);
-    }
+    if (!BRANCH_DRAFT.test(ref)) throw new LedgerError(`cannot read ${ref}: ${(e as Error).message}`);
+    return readBranchDraft(ledger, ref);
   }
+}
+
+/** Step 1, code only: the support check of a draft against the ledger as committed. */
+export async function checkDraft(ledger: Ledger, md: string): Promise<SupportReport> {
+  return checkSupport(parseDraft(md), ledgerReader(ledger));
+}
+
+/**
+ * Step 3, the user's approval. `ref` is where the draft came from: a draft committed on a branch was written by
+ * someone else (an agent), so it is never the user's own, whatever `own` says.
+ */
+export function approveDraft(ledger: Ledger, md: string, ref: string | undefined, opts: { note?: string | undefined; own?: boolean | undefined }) {
+  return ledger.approveClaim(md, { ...(typeof opts.note === "string" ? { note: opts.note } : {}), own: opts.own === true && !(ref !== undefined && BRANCH_DRAFT.test(ref)) });
 }
 interface Io {
   out(line: string): void;
@@ -79,7 +99,7 @@ export async function runClaimCommand(engine: Engine, args: string[], v: Values,
     const ledger = await openCurrentProject(engine, v, env);
     const md = await readDraft(ledger, file);
     if (sub === "check") {
-      const report = await checkSupport(parseDraft(md), ledgerReader(ledger));
+      const report = await checkDraft(ledger, md);
       io.out(v.json ? JSON.stringify(report, null, 2) : `project ${ledger.name}\n${renderReport(report)}`);
       return report.ok ? 0 : 1;
     }
@@ -99,7 +119,7 @@ export async function runClaimCommand(engine: Engine, args: string[], v: Values,
       io.out(`approve with: re claim approve ${file}${r.review.verdict === "ready" ? "" : "   (the reviewer suggests revising first; your call)"}`);
       return 0;
     }
-    const a = await ledger.approveClaim(md, { ...(typeof v.note === "string" ? { note: v.note } : {}), own: v.own === true && !BRANCH_DRAFT.test(file) });
+    const a = await approveDraft(ledger, md, file, { note: typeof v.note === "string" ? v.note : undefined, own: v.own === true });
     io.out(`approved: ${a.id} in logic/claims.md (${a.provenance}); support re-checked at ${a.report.revision.slice(0, 12)}, review ${a.review.verdict} by ${a.review.reviewer.alias}`);
     io.out(`gate record: engine/claims/${a.id}/`);
     return 0;

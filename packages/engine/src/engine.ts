@@ -136,7 +136,12 @@ export class Engine {
         ),
       })),
     );
-    return { machine: this.config.engine.machine, paths: this.paths, providers, today: await this.governor.today(true), caps: this.config.engine.budget };
+    return { machine: this.config.engine.machine, paths: this.paths, providers, ...(await this.usage()) };
+  }
+
+  /** Today's usage (reloaded from usage.jsonl) and the configured caps: the budget half of status(). */
+  async usage(): Promise<Pick<Status, "today" | "caps">> {
+    return { today: await this.governor.today(true), caps: this.config.engine.budget };
   }
 
   /** Cheapest configured alias for a vendor, by pi-ai catalog list price (health checks). */

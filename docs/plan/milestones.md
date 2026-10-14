@@ -84,6 +84,12 @@ Electron + React over the engine API: project view (ARA claims <-> evidence <-> 
 (jobs, claims, pushes), panel comparison (blind), job/campaign monitor, usage dashboard; Keychain via
 safeStorage; macOS notifications for approvals; signing + notarization.
 Acceptance: the M5 and M6 flows can be completed entirely from the app.
+- **M8.1 engine API: implemented (2026-10-14).** `re serve`: HTTP + SSE on 127.0.0.1 with a per-start bearer token
+  in `<home>/api.json` (DR-0002 amendment). Endpoints for status/usage, projects and ledger reads (hypotheses, tree,
+  claims, decisions), jobs (list, card, approve, deny, submit, cancel, refresh, fetch), machines, panels (list,
+  blind show, judge), the claim gate (check, review, approve), and `GET /api/events`; each wraps the functions the
+  CLI uses. Tested socketless through `handle(Request)`; the socket test skips where binding a port is refused.
+- Open: the Electron + React app itself, Keychain via safeStorage, notifications, signing + notarization.
 
 ## M9 — Campaigns and async
 Campaign spec + runner (scheduler-native arrays/dependencies or headless engine on workstation);

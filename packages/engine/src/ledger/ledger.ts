@@ -194,6 +194,11 @@ export class Ledger {
     return parseEntries(await readFile(join(this.dir, CLAIMS), "utf8"), /^C\d+$/);
   }
 
+  /** Decisions in engine/decisions.md (hypothesis approvals and `decision add`). */
+  async decisions(): Promise<MdEntry[]> {
+    return parseEntries(await readFile(join(this.dir, DECISIONS), "utf8"), /^D\d+$/);
+  }
+
   async writes(): Promise<LedgerWrite[]> {
     const text = await readFile(join(this.dir, LOG), "utf8");
     return text.split("\n").filter(Boolean).map((l) => JSON.parse(l) as LedgerWrite);
