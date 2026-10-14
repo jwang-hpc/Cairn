@@ -51,6 +51,13 @@ memory) and the state of HPC jobs, so the user can see what's running and what a
 - Needs: Overleaf Git integration (a paid Overleaf feature) or GitHub sync; an Overleaf git token stored on
   the host (Keychain, M8); a new network domain (`git.overleaf.com`) approved for the executor only.
 - Decide: git integration vs. GitHub sync; whether pulls are automatic or on request.
+- Bibliography with the git push: the Overleaf repo's `refs.bib` is a **derived copy**, never a second source.
+  - **The record:** the project's `lit/refs.bib` stays the only record.
+  - **On each push:** Cairn regenerates Overleaf's copy from it. Optionally the copy holds only the entries the draft
+    cites, which is what a submission needs.
+  - **Edits made in Overleaf** (e.g. a co-author adds a reference by hand) come back on the pull and are flagged, not
+    merged silently. A new reference enters `lit/refs.bib` through `resolve` (or as user-vouched from Zotero), and the
+    next push carries it. The same holds for `drafts/`, which the Overleaf repo mirrors.
 - Bibliography, for now (2026-10-14): the user copies each project's `lit/refs.bib` into the Overleaf project by
   hand. Its citekeys are the ones the drafts cite. Overleaf's own Zotero link is not used: it is a premium feature,
   imports a whole library (not a collection), and generates its own citekeys.
