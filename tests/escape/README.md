@@ -17,17 +17,20 @@ pnpm test:escape          # or: corepack pnpm test:escape
 | 3 | Non-allowlisted domain via proxy; direct IP; DNS; proxy CONNECT to `127.0.0.1`/`localhost`/gateway | 403 + `egress` deny logged; no route; DNS fails in < 2 s |
 | 4 | Host loopback services and the executor via the gateway | unreachable |
 | 4b | Host ports bound to all interfaces (a test service on `0.0.0.0`, AirPlay 5000/7000, ...) | unreachable: needs the pf guard, `sudo sh scripts/pf-agents.sh install` |
-| 4c | IPv6 from an agent to the host bridge | **measured, not asserted** (the pf guard is IPv4) |
+| 4c | IPv6 from an agent to the host bridge | none: agents boot with `ipv6.disable=1` (no IPv6 addresses, probes fail) |
 | 5 | Agent A reaches agent B's server | unreachable (separate networks) |
 | 6 | Executor without / with wrong token | 401, audited, token never logged |
 | 6b | Agent writes a job that breaks machine policy (`ssh`, reads a key, 99 nodes); plants a job script symlinked to a host secret; makes an experiment dir a symlink to the host home | all refused (read inside the agent's container, as jobs.submit does) before anything is stored; 3 audit entries; the secret never appears |
-| 7 | Launcher with `--ssh`, bare `-e`, out-of-root mount, default network, secret env, symlinked role path | refused before the runtime runs anything |
+| 7 | Launcher with `--ssh`, bare `-e`, out-of-root mount, default network, other kernel args, secret env, symlinked role path | refused before the runtime runs anything |
 | 8 | Every attempt logged | one tool_call + tool_result per attempt |
 
-## Last run (2026-10-14, pf guard installed; Apple container 1.5.0, macOS 26.6.2)
+## Last run (2026-10-14, pf guard + ipv6.disable=1; Apple container 1.5.0, macOS 26.6.2)
 11/11 pass; 35 attempts logged. 4b: every probed host port CLOSED to agents (test service on `0.0.0.0`, 22, 5000,
-7000, 3000, 8000, 8080) with AirPlay Receiver on. 4c: the agent has only IPv6 link-local on eth0 and **reached** a
-host service on `::` via the bridge's link-local address (open question 12, IPv6 part).
+7000, 3000, 8000, 8080) with AirPlay Receiver on. 4c: the agent has no IPv6 interfaces; the bridge's link-local
+address is unreachable.
+
+Run before ipv6.disable=1 (same day): 4c showed the agent **reaching** a host service on `::` via the bridge's
+IPv6 link-local address.
 
 ## Run after M5 (2026-10-14)
 10/10 pass, including 6b (job policy and planted symlinks, read inside the container); 33 attempts logged;

@@ -204,8 +204,8 @@ describe.skipIf(!ON)("escape suite (DR-0005)", () => {
     expect(results.filter((r) => r.endsWith("OPEN")), "install the pf guard: sudo sh scripts/pf-agents.sh install").toEqual([]);
   });
 
-  it("4c. measure: IPv6 from an agent to the host's bridge addresses", async () => {
-    // The pf guard is IPv4; this shows whether an IPv6 path to the host exists at all.
+  it("4c. agents have no IPv6 (kernel ipv6.disable=1), so no IPv6 path to the host's bridge", async () => {
+    // The pf guard is IPv4; IPv6 link-local reached the host before agents booted without IPv6.
     const v6port = await listen("::", "v6-service");
     const ifc = execFileSync("ifconfig", { encoding: "utf8" });
     const block = ifc.split(/\n(?=\S)/).find((b) => b.includes(`inet ${A.network.gateway} `)) ?? "";
@@ -218,6 +218,8 @@ describe.skipIf(!ON)("escape suite (DR-0005)", () => {
       results.push(`[${target}]:${v6port}: ${r.stdout.trim()}`);
     }
     console.warn(`IPv6: agent interfaces:\n${inside.stdout.trim() || "  (none)"}\nhost bridge addresses probed:\n  ${results.join("\n  ") || "(the bridge has no IPv6 address)"}`);
+    expect(inside.stdout.trim(), "the agent has IPv6 addresses").toBe("");
+    expect(results.filter((r) => /: OPEN$/.test(r))).toEqual([]);
   });
 
   it("5. agents cannot reach each other", async () => {
@@ -287,7 +289,7 @@ describe.skipIf(!ON)("escape suite (DR-0005)", () => {
     expect(() => toRunArgv({ ...spec, env: { ...spec.env, GH_TOKEN: "x" } }, policy)).toThrow(UnsafeArgvError);
     const argv = toRunArgv(spec, policy);
     const i = argv.indexOf("--entrypoint");
-    for (const extra of [["--ssh"], ["-e", "SSH_AUTH_SOCK"], ["--mount", `type=bind,source=${decoy},target=/work/x`], ["--network", "default"]]) {
+    for (const extra of [["--ssh"], ["-e", "SSH_AUTH_SOCK"], ["--mount", `type=bind,source=${decoy},target=/work/x`], ["--network", "default"], ["--kernel-arg", "init=/bin/sh"]]) {
       expect(() => validateRunArgv([...argv.slice(0, i), ...extra, ...argv.slice(i)], policy), extra.join(" ")).toThrow(UnsafeArgvError);
     }
     // A project whose role path is a symlink to the host home is refused, and nothing is left running.

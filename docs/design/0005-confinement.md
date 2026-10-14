@@ -57,5 +57,8 @@ executor tool without a valid token; submit a job violating machine policy. Ever
   into Apple's `com.apple/*` anchor slot: each agent subnet may open TCP only to its own gateway's egress proxy
   (port 3128); everything else from the pool to the Mac is refused. Host services bound to all interfaces (AirPlay
   Receiver, dev servers) are no longer reachable from agents, whatever the user runs.
-- Escape test 4b now asserts this (it measured before). IPv6 from agents to the host is measured by test 4c; the
-  guard is IPv4 only until that shows an IPv6 path.
+- Escape test 4b now asserts this (it measured before).
+- **IPv6:** test 4c found an IPv6 link-local path from an agent to host services on `::` (addresses derive from
+  random MACs on dynamic bridges, so pf can't target them). Agents therefore boot with `--kernel-arg
+  ipv6.disable=1`: no IPv6 in the agent VM at all. The argv allowlist requires that flag and refuses any other
+  kernel argument.
