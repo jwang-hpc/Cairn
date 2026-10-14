@@ -50,3 +50,26 @@ stream (`GET /api/events`). The "HTTP/WebSocket" in the table above now means HT
 - **Events:** the stream tails `events.jsonl` by offset (1 s polling, no `fs.watch`), compares job states from the
   job store (2 s), and sends a heartbeat comment every 15 s. A browser `EventSource` can't send an
   `Authorization` header, so the app reads the stream with `fetch` (renderer or Electron main process).
+
+## Amendment (2026-10-14): desktop app build (M8.2)
+User decision after comparing two setups: **Vite for the renderer only, tsc for the Electron main process and
+preload** (no electron-vite). The main process is deliberately thin: one window, the engine connection holding the
+API token, and later notifications and Keychain. So electron-vite's main-process bundling and hot restart buy
+little. Its v5 also supports Vite only up to 7, and v6 was too new to pin. Revisit electron-vite 6 if the dev loop
+hurts; only build config would change.
+- **Pinned:**
+  - runtime: electron 44.5.0, react and react-dom 19.3.0;
+  - build: vite 8.3.1, @vitejs/plugin-react 6.1.1, @types/react and @types/react-dom 19.3.0.
+- **Electron's binary download:** its install script is allowed (`onlyBuiltDependencies`); it fetches from GitHub
+  releases.
+- **No change to the engine's dependency graph:** `undici`, an optional dependency of Electron's downloader, is
+  ignored (`pnpm.ignoredOptionalDependencies`). Otherwise pnpm would hand it to the engine's model SDKs as an
+  optional peer.
+- **Security defaults:**
+  - the renderer is sandboxed, with context isolation and no Node;
+  - built pages load from `cairn-app://` with a strict CSP (no inline scripts, no network);
+  - navigation, new windows, webviews, and permission requests are refused;
+  - the renderer reaches the engine only through `window.cairn`. The main process checks each request (GET/POST
+    under `/api/`, from the app's own main frame) and adds the bearer token, which the renderer never sees.
+- **Engine:** the app connects to a live `re serve` found through `<home>/api.json`, or starts one and stops it on
+  quit.

@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "tsBuildInfoFile": "dist/.main.tsbuildinfo"
+  },
+  "include": ["src/main", "src/preload", "src/shared"],
+  "exclude": ["src/**/*.test.ts"]
+}
