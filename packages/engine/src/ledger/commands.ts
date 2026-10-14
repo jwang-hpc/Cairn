@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { type DataClass, NODE_TYPES, type NodeType, provenance } from "@cairn/shared";
 import type { Engine } from "../engine.js";
-import { Ledger, LedgerError, type NodeInput } from "./ledger.js";
+import { Ledger, LedgerError, type NodeInput, PROJECT_NAME } from "./ledger.js";
 
 export const LEDGER_COMMANDS = ["project", "hypothesis", "trace", "tree", "decision", "ledger"] as const;
 
@@ -81,10 +81,47 @@ async function writeState(engine: Engine, state: { project: string }): Promise<v
   await writeFile(statePath(engine), JSON.stringify(state));
 }
 
+/** A project's directory. The name must be a project name, never a path (the API passes names from requests). */
+function projectDir(engine: Engine, name: string): string {
+  if (!PROJECT_NAME.test(name)) throw new LedgerError(`bad project name ${JSON.stringify(name)}`);
+  return join(projectsDir(engine), name);
+}
+
 export async function openCurrentProject(engine: Engine, v: Values, env: NodeJS.ProcessEnv): Promise<Ledger> {
   const name = (v.project as string | undefined) ?? env.CAIRN_PROJECT ?? (await readState(engine)).project;
   if (!name) throw new LedgerError("no project selected: pass --project <name>, set CAIRN_PROJECT, or run `re project use <name>`");
-  return Ledger.open(join(projectsDir(engine), name));
+  return Ledger.open(projectDir(engine, name));
+}
+
+export interface ProjectSummary {
+  name: string;
+  dataClass: DataClass;
+  dir: string;
+  /** Selected with `project use` (state.json). */
+  current: boolean;
+}
+
+/** `project list`: the Cairn projects in the projects directory, by name; anything else there is skipped. */
+export async function listProjects(engine: Engine): Promise<ProjectSummary[]> {
+  const names = await readdir(projectsDir(engine)).catch(() => [] as string[]);
+  const cur = (await readState(engine)).project;
+  const out: ProjectSummary[] = [];
+  for (const n of names.sort()) {
+    try {
+      const l = await Ledger.open(projectDir(engine, n));
+      out.push({ name: n, dataClass: l.dataClass, dir: l.dir, current: n === cur });
+    } catch {
+      // not a Cairn project; skip
+    }
+  }
+  return out;
+}
+
+/** `project use`: make an existing project the current one. */
+export async function useProject(engine: Engine, name: string): Promise<Ledger> {
+  const l = await Ledger.open(projectDir(engine, name));
+  await writeState(engine, { project: name });
+  return l;
 }
 
 function need(v: Values, keys: string[], usage: string): void {
@@ -132,24 +169,15 @@ async function dispatch(engine: Engine, command: string, args: string[], v: Valu
         return 0;
       }
       if (sub === "list") {
-        const names = await readdir(projectsDir(engine)).catch(() => [] as string[]);
-        const cur = (await readState(engine)).project;
-        if (names.length === 0) io.out("(no projects)");
-        for (const n of names.sort()) {
-          try {
-            const l = await Ledger.open(join(projectsDir(engine), n));
-            io.out(`${n === cur ? "*" : " "} ${n}  [${l.dataClass}]`);
-          } catch {
-            // not a Cairn project; skip
-          }
-        }
+        const projects = await listProjects(engine);
+        if (projects.length === 0) io.out("(no projects)");
+        for (const p of projects) io.out(`${p.current ? "*" : " "} ${p.name}  [${p.dataClass}]`);
         return 0;
       }
       if (sub === "use") {
         const name = rest[0];
         if (!name) throw new UsageError("usage: re project use <name>");
-        await Ledger.open(join(projectsDir(engine), name));
-        await writeState(engine, { project: name });
+        await useProject(engine, name);
         io.out(`current project: ${name}`);
         return 0;
       }

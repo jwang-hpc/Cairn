@@ -31,3 +31,22 @@ Code borrowed from PiPilot must be ported to the new package names/APIs. pi-mono
 - **Agent runtime confirmed:** `@earendil-works/pi-ai`, `pi-agent-core`, and `pi-mcp` at 1.2.0 (spikes 1, 2).
 - **Toolchain:** pnpm 10.34.6 (pnpm 12 can't be launched by Node 24.5's bundled corepack and downloads a
   native binary at runtime), TypeScript 7.0.2, vitest 5.0.2, all pinned exactly.
+
+## Amendment (2026-10-14): engine API is HTTP + SSE
+User decision (M8.1): the engine's local API is plain HTTP plus Server-Sent Events, not WebSocket, built on Node
+built-ins with no new dependency. Actions (approve, deny, judge, check, review) and reads are HTTP requests with JSON
+in and out; the only server-to-app traffic the app needs, new engine events and job state changes, is one SSE
+stream (`GET /api/events`). The "HTTP/WebSocket" in the table above now means HTTP + SSE.
+- **Serving:** `re serve [--port N]` binds `127.0.0.1` only (default: any free port; DR-0005 amendment: engine
+  services bind loopback). It writes `<home>/api.json`, mode 0600, `{ url, token, pid }`, which the app reads to
+  find the engine; the file is removed on exit, and a second engine refuses to start while the first is alive.
+- **Access:** a bearer token of 32 random bytes, new every start, compared in constant time; Host must be
+  `127.0.0.1` or `localhost` with the bound port (DNS rebinding); a request with an `Origin` header other than
+  `null` or a configured app origin is refused, so a web page in the user's browser can't drive approvals. Every
+  refusal and every state-changing request is appended to `<home>/audit.log` as actor `api`. The token is never
+  logged, printed, or returned.
+- **Thin client holds both ways:** every endpoint wraps the same engine functions the CLI calls
+  (`packages/engine/src/api/`), so whatever the app does, `re` can do, and the ledger records are the same.
+- **Events:** the stream tails `events.jsonl` by offset (1 s polling, no `fs.watch`), compares job states from the
+  job store (2 s), and sends a heartbeat comment every 15 s. A browser `EventSource` can't send an
+  `Authorization` header, so the app reads the stream with `fetch` (renderer or Electron main process).

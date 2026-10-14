@@ -3,7 +3,7 @@ import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { Engine } from "../engine.js";
 import { readUsage } from "../events/log.js";
-import { LedgerError } from "../ledger/ledger.js";
+import { type Ledger, LedgerError } from "../ledger/ledger.js";
 import { openCurrentProject } from "../ledger/commands.js";
 import { judgePanel, type MemberRef, PanelError, parseMemberRef, readPanel, renderPanel, ROUND_MODES, type RoundMode, runPanel } from "./panel.js";
 
@@ -33,6 +33,26 @@ interface Io {
 }
 const csv = (s: string | undefined) => (s ?? "").split(",").map((x) => x.trim()).filter(Boolean);
 const fmtTok = (n: number) => n.toLocaleString("en-US");
+
+export interface PanelSummary {
+  id: string;
+  created: string;
+  modes: RoundMode[];
+  hypothesis: string | null;
+  judged: boolean;
+  question: string;
+}
+
+/** `panel list`: the panels stored in a project (engine/panels/<id>/), oldest first. */
+export async function listPanels(ledger: Ledger): Promise<PanelSummary[]> {
+  const ids = (await readdir(join(ledger.dir, "engine", "panels")).catch(() => [] as string[])).sort();
+  const out: PanelSummary[] = [];
+  for (const id of ids) {
+    const { record: r } = await readPanel(ledger, id);
+    out.push({ id, created: r.created, modes: r.rounds.map((x) => x.mode), hypothesis: r.hypothesis ?? null, judged: r.judgment !== undefined, question: r.question });
+  }
+  return out;
+}
 
 export async function runPanelCommand(engine: Engine, args: string[], v: Values, io: Io, env: NodeJS.ProcessEnv): Promise<number> {
   const [sub, id] = args;
@@ -79,12 +99,9 @@ export async function runPanelCommand(engine: Engine, args: string[], v: Values,
         return ok ? 0 : 1;
       }
       case "list": {
-        const ids = (await readdir(join(ledger.dir, "engine", "panels")).catch(() => [] as string[])).sort();
-        if (ids.length === 0) io.out("(no panels)");
-        for (const pid of ids) {
-          const { record } = await readPanel(ledger, pid);
-          io.out(`${pid}  ${record.rounds.map((r) => r.mode).join("→").padEnd(28)} ${record.hypothesis ?? "-"}  ${record.judgment ? "judged" : "blind"}  ${record.question.slice(0, 60)}`);
-        }
+        const panels = await listPanels(ledger);
+        if (panels.length === 0) io.out("(no panels)");
+        for (const p of panels) io.out(`${p.id}  ${p.modes.join("→").padEnd(28)} ${p.hypothesis ?? "-"}  ${p.judged ? "judged" : "blind"}  ${p.question.slice(0, 60)}`);
         return 0;
       }
       case "show":

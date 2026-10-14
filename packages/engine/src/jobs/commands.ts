@@ -70,6 +70,37 @@ function statusLines(j: JobRecord): string[] {
   return lines;
 }
 
+export interface MachineSession {
+  name: string;
+  host: string;
+  scheduler: string;
+  scratch: string | null;
+  doe: boolean;
+  /** Whether the user's SSH ControlMaster for this host is up ("bad-host": machines.yaml host is not an ssh alias). */
+  session: "open" | "closed" | "bad-host";
+}
+
+/** `machine list`: machines.yaml targets and whether the user's SSH session to each is open. */
+export async function machineSessions(engine: Engine, overrides: Partial<JobServiceOptions> = {}): Promise<MachineSession[]> {
+  const out: MachineSession[] = [];
+  for (const [name, m] of Object.entries(engine.config.machines.machines)) {
+    let session: MachineSession["session"];
+    try {
+      const transport = overrides.transport?.(m) ?? new SshTransport(m.host, join(engine.paths.home, "ssh"));
+      session = (await transport.alive().catch(() => false)) ? "open" : "closed";
+    } catch {
+      session = "bad-host";
+    }
+    out.push({ name, host: m.host, scheduler: m.scheduler, scratch: m.scratch ?? null, doe: m.doe === true, session });
+  }
+  return out;
+}
+
+/** The project `job list` shows: none with --all (every project), else the selected project, else every project. */
+export async function jobListProject(engine: Engine, v: Values, env: NodeJS.ProcessEnv): Promise<string | undefined> {
+  return v.all ? undefined : openCurrentProject(engine, v, env).then((l) => l.name, () => undefined);
+}
+
 export async function runJobCommand(
   engine: Engine,
   command: string,
@@ -87,17 +118,11 @@ export async function runJobCommand(
         io.err(`re machine: unknown subcommand '${sub ?? ""}'\n${JOB_USAGE}`);
         return 2;
       }
-      const machines = Object.entries(engine.config.machines.machines);
+      const machines = await machineSessions(engine, overrides);
       if (machines.length === 0) io.out("(no machines in machines.yaml)");
-      for (const [name, m] of machines) {
-        let session: string;
-        try {
-          const transport = overrides.transport?.(m) ?? new SshTransport(m.host, join(engine.paths.home, "ssh"));
-          session = (await transport.alive().catch(() => false)) ? "session open" : "session closed";
-        } catch {
-          session = "BAD HOST (set machines.yaml host to your ~/.ssh/config alias)";
-        }
-        io.out(`${name.padEnd(14)} ssh ${m.host.padEnd(14)} ${m.scheduler.padEnd(6)} ${m.scratch ? `scratch ${m.scratch}` : "NO SCRATCH (set machines.yaml scratch)"}  ${session}${m.doe ? "  [DOE]" : ""}`);
+      const session = { open: "session open", closed: "session closed", "bad-host": "BAD HOST (set machines.yaml host to your ~/.ssh/config alias)" };
+      for (const m of machines) {
+        io.out(`${m.name.padEnd(14)} ssh ${m.host.padEnd(14)} ${m.scheduler.padEnd(6)} ${m.scratch ? `scratch ${m.scratch}` : "NO SCRATCH (set machines.yaml scratch)"}  ${session[m.session]}${m.doe ? "  [DOE]" : ""}`);
       }
       return 0;
     }
@@ -107,7 +132,7 @@ export async function runJobCommand(
     };
     switch (sub) {
       case "list": {
-        const project = v.all ? undefined : await openCurrentProject(engine, v, env).then((l) => l.name, () => undefined);
+        const project = await jobListProject(engine, v, env);
         const list = await jobs.list(project ? { project } : {});
         if (list.length === 0) io.out(`(no jobs${project ? ` in ${project}` : ""})`);
         for (const j of list) io.out(`${j.id}  ${j.state.padEnd(16)} ${`${j.experiment} → ${j.target}`.padEnd(26)} ${project ? "" : `${j.project}  `}${who(j)}  ${when(j.created)}`);

@@ -324,6 +324,13 @@ export async function judgePanel(ledger: Ledger, id: string, j: { prefer: string
   return record;
 }
 
+/** A panel record as a client may see it: members are labels only until the user records a judgment. */
+export type PanelView = Omit<PanelRecord, "members"> & { members: (PanelMember | { label: string })[] };
+
+export function panelView(record: PanelRecord): PanelView {
+  return record.judgment ? record : { ...record, members: record.members.map((m) => ({ label: m.label })) };
+}
+
 /** Replay a stored panel as text. Labels stay blind until a judgment exists. */
 export function renderPanel(record: PanelRecord, texts: Map<string, string>): string {
   const blind = !record.judgment;

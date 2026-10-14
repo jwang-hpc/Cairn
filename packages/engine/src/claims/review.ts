@@ -123,6 +123,14 @@ export function renderReview(r: ClaimReview): string {
   ].join("\n");
 }
 
+/** The reviewer could not be asked or did not answer (unknown alias, provider refused the data class, call failed). */
+export class ReviewerError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ReviewerError";
+  }
+}
+
 /** One reviewer call through the model layer (data class, budget, event log). */
 export async function callReviewer(
   engine: Engine,
@@ -132,7 +140,7 @@ export async function callReviewer(
 ): Promise<{ text: string; run: string; model: string }> {
   const run = randomUUID();
   const model = engine.config.models.models[who.alias]?.id;
-  if (!model) throw new Error(`unknown model alias '${who.alias}'`);
+  if (!model) throw new ReviewerError(`unknown model alias '${who.alias}'`);
   const budget = await engine.governor.startRun("review", run);
   const s = await engine.layer.stream(
     { alias: who.alias, effort: who.effort, role: "review", dataClass: ledger.dataClass, run: budget },
@@ -142,6 +150,6 @@ export async function callReviewer(
     // drain; the final message carries the text or the error
   }
   const final = await s.result();
-  if (final.stopReason === "error" || final.stopReason === "aborted") throw new Error(`reviewer call failed: ${final.errorMessage ?? final.stopReason}`);
+  if (final.stopReason === "error" || final.stopReason === "aborted") throw new ReviewerError(`reviewer call failed: ${final.errorMessage ?? final.stopReason}`);
   return { text: final.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("").trim(), run, model };
 }
