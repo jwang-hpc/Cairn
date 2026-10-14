@@ -8,4 +8,5 @@ multi-model panels (Claude + GPT) and strict agent confinement. Packaged as a ma
 - Build plan: `docs/plan/milestones.md`
 - Instructions for coding agents: `CLAUDE.md`
 
-Status: design complete, implementation starting at M0.
+Status: M0 (de-risking spikes) and M1 (engine skeleton, `re` CLI) done; next is M2 (launcher and confined
+tools). Requires macOS 26 with Apple `container`.

@@ -32,3 +32,16 @@ Known costs of hybrid: two event formats to normalize, model token inside contai
 ## Model registry lag
 pi-ai may not know new model IDs. Follow PiPilot's shim pattern (synthetic model entries) and keep model
 IDs in config/models.yaml.
+
+## Amendment (2026-10-14): M0 results
+- **Seam 4 verified, no adapter needed.** `@earendil-works/pi-mcp` 1.2.0 talks Streamable HTTP with a
+  per-session bearer token to a host MCP server; MCP tools are wrapped as pi-agent-core `AgentTool`s
+  (spike 2). The token stays in the host-side client and never reaches tool args, results, or the model.
+  DR tool names contain dots (`jobs.submit`); providers allow only `[A-Za-z0-9_-]`, so the engine keeps a
+  reversible mapping (`mcp_jobs_submit`) and logs both names.
+- **Seam 5: approvals are out-of-band.** pi-mcp implements no elicitation or sampling, so a tool cannot
+  ask the user mid-call. Privileged tools return `pending_approval` plus a request id; the user approves
+  in the app or CLI; the agent polls a status tool. Tools must not block waiting for a human.
+- **Seam 3:** some routes (pi-ai `openai-codex`) stream over WebSocket, so usage is taken from pi-ai
+  message usage, never from HTTP hooks. Implemented in M1.
+- **Seam 1** is implemented by the `Engine` facade (M1.7); no pi types cross it.

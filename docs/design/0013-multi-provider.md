@@ -50,3 +50,15 @@ Tool-using roles (coder, analysis, literature) only use models that pass the too
 - Per-role fallback chain for outages or usage limits.
 - Registry lag: PiPilot-style shim entries or pi-ai dynamic/custom providers; model IDs only in config.
 - Prompt caching behavior differs per provider; keep stable prefixes and measure cost per provider.
+
+## Amendment (2026-10-14): M0 and M1 results
+- **Access matrix, OpenAI row:** subscription via pi-ai `openai-codex` (ChatGPT Plus,
+  `chatgpt.com/backend-api`); API key via `openai`. "Sign in with ChatGPT" via `openai` returns HTTP 520
+  (spike 1) and is not used. Google and Microsoft are still untested (no keys yet).
+- **Routes in config:** `models.yaml` providers list ordered routes (subscription first, API key after);
+  the model layer falls back only on auth, limit, or server errors that arrive before any content (M1.6).
+- **Effort mapping verified** for engine levels low–max: Anthropic Claude 5.x via a per-turn
+  `output_config.effort` system message (the top-level field is a constant); OpenAI via
+  `reasoning.effort` on both routes. Recorded in `config/models.example.yaml`.
+- **Data governance** is enforced in the model layer (M1.6): a refused data class sends nothing and is
+  logged as a policy-denied `approval` event.

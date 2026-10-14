@@ -31,3 +31,19 @@ Every action is appended to `engine/audit.log`.
 
 ## Workstation and UNCC HPC
 Same executor interface; thresholds may allow auto-approval for small jobs.
+
+## Amendment (2026-10-14): M0 results (spike 4)
+- **User-held sessions:** the user opens one SSH ControlMaster per host (key via jump host for the
+  workstation; password + Duo for UNCC HPC). Sockets live in the engine home, mode 0700.
+  `ControlPersist` (4 h default) bounds how long the executor can act without the user.
+- **Executor connects mux-only:** `ControlMaster=no`, `BatchMode=yes`, every authentication method off,
+  all forwarding off (agent, X11, ports). It therefore can't open its own connection or prompt, and
+  closing the master revokes its reach on every host, including key-based ones (verified).
+- **Remote scripts** go to `sh -s` on stdin; untrusted strings are never interpolated into a shell command.
+- **`sbatch --test-only` is the lint pre-flight:** it validates partition, account, and limits and
+  estimates a start time without queueing; show the estimate on the approval card. Slurm messages vary by
+  version (24.11 reports `allocation failure: <reason>`), so parse tolerantly and keep raw output in
+  `engine/audit.log`.
+- **Workstation has no scheduler:** `jobs.submit` there needs a runner (e.g. `systemd-run --user` or a
+  detached wrapper) and a configured scratch path (`$HOME` is small).
+- **`config/machines.yaml` holds `~/.ssh/config` aliases,** not raw hostnames.

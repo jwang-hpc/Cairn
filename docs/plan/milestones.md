@@ -8,15 +8,20 @@ Each milestone ends with something the user can run and verify. One PR per task 
   OpenAI-compatible endpoint (Foundry or a third-party host). Record effort mapping per provider.
 - Connect `@earendil-works/pi-mcp` (Streamable HTTP, bearer token) to a stub executor MCP server.
 - Node drives Apple `container`: create, mount a single directory, `exec` a command, capture output,
-  enforce no-network and an allowlisted domain. Same via Docker.
+  enforce no-network and an allowlisted domain. ~~Same via Docker.~~ (Dropped 2026-10-14: no Docker
+  fallback; see DR-0002 amendment.)
 - Executor spike: open an SSH ControlMaster to the workstation (and UNCC HPC), run `sbatch --test-only`
   or equivalent, parse output.
 Acceptance: a short report per spike (works / workaround / blocker).
+**Status (2026-10-14): done.** All four spikes work (Claude/OpenAI auth; Gemini and MAI still untested).
+Reports: `spikes/{pi-auth,pi-mcp,containers,executor-ssh}/REPORT.md`; DRs amended accordingly.
 
 ## M1 — Engine skeleton and event log
 pnpm monorepo; packages/shared schemas (TypeBox); normalized event log; budget governor (records usage,
 enforces a daily cap); config loading (models/roles/machines); engine CLI `re status`.
 Acceptance: a pi agent answers a prompt; the call appears in engine/usage.jsonl with model, effort, tokens.
+**Status (2026-10-13): done** (PRs #2–#8). Verified live with `re ask`; usage lands in `.engine/usage.jsonl`
+until projects exist (M3).
 
 ## M2 — Launcher and confined tools
 Git worktree per agent; container per agent with role-based mounts; pi tools (bash, read, write, edit,
