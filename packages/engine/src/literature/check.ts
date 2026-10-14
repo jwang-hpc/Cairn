@@ -86,6 +86,9 @@ export function citationsIn(md: string): string[] {
   return keys;
 }
 
+/** A paper note's relevance score: the agent's judgement of the paper against the project's problem, 0-10. */
+export const isRelevance = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= 10;
+
 /** Sections a per-paper note has (DR-0009). */
 export const NOTE_SECTIONS = ["Problem", "Method", "Setup", "Key numbers", "Limitations", "Artifact"] as const;
 
@@ -207,7 +210,7 @@ export async function checkLiterature(files: LitFiles, lit: LiteratureService): 
       if (!byKey.has(k)) fail(n.path, `cites ${k}, which is not in lit/refs.bib (resolve it first)`);
     }
     const front = /^---\n([\s\S]*?)\n---\n/.exec(n.text)?.[1];
-    let meta: { paper?: unknown } = {};
+    let meta: { paper?: unknown; relevance?: unknown } = {};
     try {
       meta = (front ? (parseDocument(front).toJS() as typeof meta | null) : null) ?? {};
     } catch {
@@ -227,6 +230,8 @@ export async function checkLiterature(files: LitFiles, lit: LiteratureService): 
     if (!(doi && normDoi(entry.fields.doi) === doi) && !(arxiv && normArxiv(entry.fields.eprint) === arxiv)) {
       fail(n.path, `paper: ${id} is not the work ${entry.key} names in lit/refs.bib`);
     }
+    if (meta.relevance === undefined) warn(n.path, "no relevance score (relevance: 0-10 in the frontmatter)");
+    else if (!isRelevance(meta.relevance)) fail(n.path, `relevance must be an integer from 0 to 10, not ${JSON.stringify(meta.relevance)}`);
     const headings = new Set([...n.text.matchAll(/^#{2,3}\s+(.+?)\s*$/gm)].map((m) => m[1]!.toLowerCase()));
     const missing = NOTE_SECTIONS.filter((s) => !headings.has(s.toLowerCase()));
     if (missing.length) warn(n.path, `missing sections: ${missing.join(", ")}`);
@@ -234,4 +239,39 @@ export async function checkLiterature(files: LitFiles, lit: LiteratureService): 
   for (const e of entries) if (!cited.has(e.key)) warn(`lit/refs.bib:${e.line} ${e.key}`, "cited by no note");
 
   return { items, references: entries.length, citations, notes: files.notes.length, ok: !items.some((x) => x.level === "fail") };
+}
+
+export interface PaperNote {
+  path: string;
+  key: string;
+  paper: string;
+  relevance?: number;
+  title?: string;
+  year?: number;
+}
+
+/** Per-paper notes (frontmatter `paper:`), most relevant first; unscored notes last. */
+export function paperNotes(notes: LitFiles["notes"]): PaperNote[] {
+  const out: PaperNote[] = [];
+  for (const n of notes) {
+    const key = /^lit\/notes\/([a-z0-9]+)\.md$/.exec(n.path)?.[1];
+    const front = /^---\n([\s\S]*?)\n---\n/.exec(n.text)?.[1];
+    if (!key || !front) continue;
+    let meta: Record<string, unknown>;
+    try {
+      meta = (parseDocument(front).toJS() as Record<string, unknown> | null) ?? {};
+    } catch {
+      continue;
+    }
+    if (meta.paper === undefined) continue;
+    out.push({
+      path: n.path,
+      key,
+      paper: String(meta.paper),
+      ...(isRelevance(meta.relevance) ? { relevance: meta.relevance } : {}),
+      ...(typeof meta.title === "string" ? { title: meta.title } : {}),
+      ...(typeof meta.year === "number" ? { year: meta.year } : {}),
+    });
+  }
+  return out.sort((a, b) => (b.relevance ?? -1) - (a.relevance ?? -1) || a.key.localeCompare(b.key));
 }

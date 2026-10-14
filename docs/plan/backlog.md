@@ -81,3 +81,38 @@ the app assuming it (the CLI already does; DR-0013 amendment).
   - allowed, as for every other class (today's behaviour);
   - off for `restricted` unless the user allows it for that project (asked in the same dialog);
   - an allowlist of data classes for the literature services in engine.yaml, like the one for model providers.
+
+## Paper library across projects
+*Requested 2026-10-14.* Papers found in one project stay in that project. The literature agent searches for, resolves,
+and notes the same papers again in every project. A shared library would let it start from what is already known.
+- **Reference:** PiPilot's Paper Wiki (`lib/wiki/`, `docs/rfc/003-global-paper-wiki.md`):
+  - one global folder of model-written pages, keyed by DOI, then arXiv id, then title and year;
+  - concept pages that synthesize across papers;
+  - one writer agent, working in paced background cycles;
+  - a record of which projects contributed each paper.
+
+  Retrieval scans an index, which the RFC itself flags as not scaling past about 200 pages. Its generation runs
+  model calls outside the agent loop, which Cairn would route through the logged model layer instead (invariant 6).
+- **What is shared, and what isn't:**
+  - Shared: paper-level facts only. That means the identity, the verified BibTeX, and the note sections Problem,
+    Method, Setup, Key numbers, Limitations, and Artifact, each with its `based_on` (abstract or full text).
+  - Stays in the project: the relevance score and its reason, the synthesis, and anything about the project. A
+    library entry must not carry one project's ideas into another, or to a provider allowed only a lower data class.
+- **Where:** its own git repository (in the engine home, or a path the user chooses), with history and provenance
+  like a ledger. Entries are keyed by DOI or arXiv id, and their BibTeX is re-verified by the same check as
+  `lit/refs.bib`.
+- **Writes:** only the engine writes, never an agent directly. `re literature accept` offers to add the accepted
+  papers' sections to the library (or a separate `re library add`). One writer under a lock, as with the ledger.
+  A full-text note supersedes an abstract-only one; key numbers keep their source.
+- **Reads:** the literature agent searches the library before the public APIs. This needs a new read-only tool
+  (e.g. `literature.library`, which you approve as a new MCP tool) doing local keyword (BM25) search, with no
+  network and no model. A per-project read-only mount is the alternative. The app gets a library view (M8).
+- **Fits:** after M8. It also helps M10: the "recover a known related-work set" eval can measure what the library
+  saves.
+- **Decide:**
+  - Location, and whether it syncs across machines (a git remote).
+  - Whether `restricted` projects contribute to it at all. Suggested: no. The papers are public, but which papers a
+    restricted project reads can itself be sensitive.
+  - What happens when two projects' notes on one paper differ: keep both with provenance, or the user picks.
+  - Search method: BM25 first. Embeddings would send note text to a provider, so they'd go through the data-class
+    gate.

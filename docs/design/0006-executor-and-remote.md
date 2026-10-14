@@ -113,7 +113,9 @@ Same executor interface; thresholds may allow auto-approval for small jobs.
   Each entry must look exactly like what resolve writes, with the same title, year, and first author as the record
   it names. Every `[@key]` or `\cite{key}` in `lit/notes/` and `logic/related_work.md` must be in `refs.bib`.
   Per-paper notes are `lit/notes/<citekey>.md`, with frontmatter `paper: doi:…|arxiv:…` and the sections from
-  DR-0009 (missing sections are a warning).
+  DR-0009 (missing sections are a warning). Each paper note also carries `relevance: 0-10`: the agent's judgement of
+  the paper against the project's problem, using the rubric in the `literature-review` skill. A malformed score fails
+  the check; a missing one is a warning. `re literature notes [<branch>]` lists the notes, most relevant first.
 - **Accept:** `re literature accept <branch>` runs the check, then writes the checked files as one ledger commit
   tagged `ai-suggested(<model>, <effort>)`, taken from the run's usage record via the commit's `Cairn-Run` trailer.
   It is refused if `lit/` changed in the project since the branch started, or if the branch deletes or symlinks

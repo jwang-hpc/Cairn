@@ -44,6 +44,8 @@ BRANCH="$(sed -n 's/^lit .*re literature check \([^ ]*\).*$/\1/p' "$TMP/run.out"
 
 echo "== part 2c: re literature check $BRANCH"
 re literature check "$BRANCH" || { echo "the note set failed the check (shown above): it can't be accepted, as designed" >&2; exit 1; }
+echo "== part 2d: the notes, most relevant first (the agent's 0-10 score)"
+re literature notes "$BRANCH"
 PROJ="$(re project | sed 's|^[^/]*||')"
 REFS="$(git -C "$PROJ" show "$BRANCH:lit/refs.bib" | grep -c '^@')"
 NOTES="$(git -C "$PROJ" ls-tree --name-only "$BRANCH" -- lit/notes/ | grep -c '\.md$' || true)"
