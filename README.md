@@ -1,4 +1,4 @@
-# Research Engine (working name)
+# Cairn 
 
 A local, human-in-the-loop research workbench: ideation and hypotheses, literature, experiment design,
 offloading experiments to a workstation and HPC systems, result analysis, and paper writing, with
