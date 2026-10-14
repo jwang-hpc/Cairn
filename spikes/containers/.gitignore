@@ -1,0 +1,5 @@
+help/
+node_modules/
+.npm-cache/
+*.log
+results.json

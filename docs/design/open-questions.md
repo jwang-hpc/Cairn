@@ -2,6 +2,10 @@
 
 1. Minimum macOS for the prototype: macOS 26 only (Apple container) vs. macOS 15 with Docker fallback.
    Default until decided: macOS 26 primary, Docker fallback implemented in launcher.
+   **Decided (2026-10-14, user): macOS 26 + Apple `container` only; no Docker fallback.** M0 spike 3 shows
+   Apple `container` 1.5.0 covers the needs: one bind mount, exec with output/exit code, no-network via an
+   `--internal` network + `--no-dns`, and a single allowlisted domain via a host CONNECT proxy bound to that
+   network's gateway. Details: spikes/containers/REPORT.md. DR-0002/DR-0005 amendments proposed in the PR.
 2. Project name.
 3. Facility policy for agents/commercial model services on LCRC and other DOE systems (blocks Tier 1 only).
 4. University IT policy on self-hosted GitHub runners / pollers on the workstation (blocks async trigger only).
