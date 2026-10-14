@@ -27,6 +27,9 @@ until projects exist (M3).
 Git worktree per agent; container per agent with role-based mounts; pi tools (bash, read, write, edit,
 python) executed via container exec; egress allowlists from roles.yaml; escape-test suite in tests/escape/.
 Acceptance: an agent edits files in its worktree only; all escape tests pass.
+**Status (2026-10-14): done** (M2.1–M2.8). Acceptance run: `scripts/acceptance-m2.sh` (agent changed only
+`analysis/summary.md`, committed on `agent/<id>`). Escape suite: 9/9 pass, 30 attempts logged. Known gap:
+host services bound to all interfaces are reachable from agents (open question 12).
 
 ## M3 — ARA ledger
 Create/open a project as an ARA artifact; PAPER.md manifest; hypotheses with falsification criteria;

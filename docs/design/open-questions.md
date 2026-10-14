@@ -46,3 +46,10 @@
     organization API key (`engine-mbp`, $100/month) is the automatic fallback.** M1 follow-ups: fall back on
     auth/usage-limit errors with an actionable message; health-check the route in `re status`; re-test when
     pi-ai is upgraded, since the route is marked superseded.
+12. (New, M2) Host services reachable from agent containers. The escape suite (test 4b, 2026-10-14) shows
+    that from an agent's `--internal` network the Mac's services bound to all interfaces are reachable via the
+    gateway: a test service on 0.0.0.0 and ports 5000/7000 (AirPlay Receiver) were OPEN; loopback-only services
+    (engine, executor) were not. Options: (a) disable services that listen on all interfaces (AirPlay Receiver)
+    — immediate, partial; (b) a pf anchor that blocks agent subnets from reaching the host except each
+    agent's proxy port — structural, needs sudo once and subnet management. Decide before M7 (agents reading
+    untrusted literature).

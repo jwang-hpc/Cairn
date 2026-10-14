@@ -23,3 +23,8 @@ pnpm test:escape          # or: corepack pnpm test:escape
 | 8 | Every attempt logged | one tool_call + tool_result per attempt |
 
 Machine-policy job rejection (DR-0005 list) arrives with the executor's job linter in M5.
+
+## Last run (2026-10-14, Apple container 1.5.0, macOS 26.6.2)
+9/9 pass; 30 attempts logged; 5 egress decisions; 3 executor audit entries. Test 4b measured host ports
+reachable via the gateway: a test service on `0.0.0.0` **OPEN**, 5000/7000 (AirPlay Receiver) **OPEN**,
+22/3000/8000/8080 closed. See open question 12.
