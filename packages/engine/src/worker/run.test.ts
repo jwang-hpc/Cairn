@@ -192,3 +192,71 @@ describe("re run (CLI)", () => {
     expect(err.at(-1)).toMatch(/cannot read task file/);
   });
 });
+
+describe("executor tools in a project run (DR-0006, DR-0004 seam 4)", () => {
+  async function projectSetup(dataClass: "unpublished" | "restricted") {
+    const { Ledger } = await import("../ledger/ledger.js");
+    const { JobService, LocalTransport } = await import("@cairn/executor");
+    const { jobLedger } = await import("../jobs/jobs.js");
+    const projects = join(base, "projects");
+    const ledger = await Ledger.create({ projectsDir: projects, name: "proj", title: "Proj", dataClass });
+    const machines = { workstation: { host: "workstation", scheduler: "none" as const, scratch: join(base, "scratch") } };
+    const cfg: LoadedConfig = {
+      ...config,
+      roles: {
+        roles: { coder: { mounts: { read: ["logic/"], write: ["src/", "experiments/"] }, network: [], executor_tools: ["jobs.submit", "jobs.status"] } },
+        defaults: { secrets: "none", egress: "deny" },
+      },
+      models: { ...config.models, routing: { coder: { worker: "acme-m@low" } } },
+      machines: { machines },
+    };
+    const eng = new Engine(cfg, { configDir: "(test)", home }, engine.pi);
+    const jobs = new JobService({ home, machines, ledger: jobLedger(projects), transport: () => new LocalTransport() });
+    return { ledger, jobs, deps: { engine: eng, skillsDir: skills, launch: fakeLaunch, jobs } };
+  }
+
+  it("a coder agent writes a job and submits it; it waits for the user; both tool names are logged", async () => {
+    const { ledger, jobs, deps: d } = await projectSetup("unpublished");
+    const manifest = { script: "run.sh", description: "count to three", resources: { cores: 1, walltime: "00:01:00" }, outputs: ["results.csv"] };
+    faux.setResponses([
+      fauxAssistantMessage([fauxToolCall("write", { path: "experiments/EXP-001/run.sh", content: "seq 3 > results.csv\n" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage([fauxToolCall("write", { path: "experiments/EXP-001/job.json", content: JSON.stringify(manifest) })], { stopReason: "toolUse" }),
+      fauxAssistantMessage([fauxToolCall("mcp_jobs_submit", { experiment: "EXP-001", target: "workstation" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage([fauxToolCall("mcp_jobs_submit", { experiment: "../../etc", target: "workstation" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage([fauxText("Submitted EXP-001; waiting for your approval.")]),
+    ]);
+    const { result, worktree } = await runTask(d, { repo: ledger.dir, role: "coder", task: "Write and submit EXP-001" });
+    expect(result.error).toBeNull();
+    expect(result.files.map((f) => f.path).sort()).toEqual(["experiments/EXP-001/job.json", "experiments/EXP-001/run.sh"]);
+
+    const [job, ...more] = await jobs.list({ project: "proj" });
+    expect(more).toEqual([]);
+    expect(job).toMatchObject({
+      state: "pending_approval",
+      experiment: "EXP-001",
+      branch: worktree.branch,
+      author: { kind: "agent", run: result.run, agent: worktree.agentId, role: "coder", model: "m1", effort: "low" },
+    });
+    expect((await git(ledger.dir, ["log", "-1", "--format=%s|%(trailers:key=Cairn-Provenance,valueonly,separator=)"])).trim()).toBe(
+      `ledger: job ${job!.id}: EXP-001 on workstation, awaiting approval|ai-suggested(m1, low)`,
+    );
+
+    const ev = await events();
+    const calls = ev.filter((e) => e.type === "tool_call" && e.name === "mcp_jobs_submit");
+    expect(calls.map((c) => (c as { mcp?: string }).mcp)).toEqual(["jobs.submit", "jobs.submit"]);
+    const results = ev.filter((e) => e.type === "tool_result" && e.name === "mcp_jobs_submit") as { isError: boolean; text: string }[];
+    expect(results[0]).toMatchObject({ isError: false, text: expect.stringContaining(`job ${job!.id}: pending_approval (EXP-001 on workstation)\nWaiting for the user to approve it`) });
+    expect(results[1]).toMatchObject({ isError: true });
+    // The bearer token never reaches the model or the log.
+    expect(JSON.stringify(ev)).not.toMatch(/Bearer|authorization/i);
+  });
+
+  it("a restricted project's data class governs the run: a provider not allowed for it is refused (invariant 9)", async () => {
+    const { ledger, deps: d } = await projectSetup("restricted");
+    faux.setResponses([fauxAssistantMessage([fauxText("should never be called")])]);
+    const { result } = await runTask(d, { repo: ledger.dir, role: "coder", task: "anything" });
+    expect(result.status).toBe("failed");
+    expect(result.error).toMatch(/may not receive 'restricted' data/);
+    expect(result.usage).toEqual([]);
+  });
+});

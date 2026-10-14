@@ -10,8 +10,11 @@
       "default": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "dependencies": {
-    "@cairn/shared": "workspace:*"
+    "@cairn/shared": "workspace:*",
+    "@modelcontextprotocol/sdk": "1.31.0"
   }
 }

@@ -2,6 +2,7 @@
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { commitWorktree, createWorktree, removeWorktree, type WorktreeRef } from "@cairn/launcher";
+import { Ledger, LedgerError } from "../ledger/ledger.js";
 import { runWorker, type WorkerBudget, type WorkerDeps, type WorkerResult } from "./run.js";
 
 export interface RunTaskOptions extends WorkerBudget {
@@ -25,11 +26,19 @@ export async function runTask(deps: WorkerDeps, opts: RunTaskOptions): Promise<R
   if (!deps.engine.config.roles.roles[opts.role]) {
     throw new Error(`unknown role '${opts.role}' (known: ${Object.keys(deps.engine.config.roles.roles).join(", ")})`);
   }
+  // A Cairn project repo: its data class governs the run's model calls, and its jobs are recorded in its ledger.
+  const project = await Ledger.open(opts.repo).then(
+    (l) => ({ name: l.name, dataClass: l.dataClass }),
+    (e: unknown) => {
+      if (e instanceof LedgerError) return undefined;
+      throw e;
+    },
+  );
   const agentId = `${opts.role}-${randomBytes(3).toString("hex")}`;
   const worktree = await createWorktree({ repo: opts.repo, agentId, root: join(deps.engine.paths.home, "worktrees") });
   let result: WorkerResult;
   try {
-    result = await runWorker(deps, { text: opts.task }, worktree, opts.role, opts);
+    result = await runWorker({ ...deps, ...(project ? { project } : {}) }, { text: opts.task }, worktree, opts.role, opts);
   } catch (e) {
     await removeWorktree(worktree, { deleteBranch: true });
     throw e;

@@ -20,12 +20,19 @@ export interface AuditRecord {
 export const AUDIT_RAW_MAX = 20_000;
 
 export class AuditLog {
+  /** Appends are chained so entries land in call order, even when callers don't await (the HTTP front). */
+  #tail: Promise<void> = Promise.resolve();
+
   constructor(readonly path: string) {}
 
-  async append(rec: Omit<AuditRecord, "ts"> & { ts?: string }): Promise<void> {
+  append(rec: Omit<AuditRecord, "ts"> & { ts?: string }): Promise<void> {
     const raw = rec.raw !== undefined && rec.raw.length > AUDIT_RAW_MAX ? `${rec.raw.slice(0, AUDIT_RAW_MAX)}\n[clipped ${rec.raw.length - AUDIT_RAW_MAX} chars]` : rec.raw;
     const line = JSON.stringify({ ts: rec.ts ?? new Date().toISOString(), ...rec, ...(raw !== undefined ? { raw } : {}) });
-    await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
-    await appendFile(this.path, `${line}\n`, { mode: 0o600 });
+    const next = this.#tail.then(async () => {
+      await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
+      await appendFile(this.path, `${line}\n`, { mode: 0o600 });
+    });
+    this.#tail = next.catch(() => {});
+    return next;
   }
 }
