@@ -1,0 +1,25 @@
+# Cairn agent image (DR-0005). Tools run here via `container exec`; the agent loop and all credentials stay
+# on the host. Runtime confinement (read-only root, no caps, no DNS, internal network, role mounts) is set by
+# packages/launcher, not here; this image only removes footguns.
+#
+# Base: python:3.12-slim pinned by index digest (recorded 2026-10-14). No package installs, so building needs no access to
+# Debian mirrors. Python data stack (numpy/pandas/...) arrives with the analysis role (M6).
+FROM docker.io/library/python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1
+
+# 1. Non-root agent user matching the launcher's --user 1000:1000.
+# 2. Name resolution from /etc/hosts only. Containers run with --no-dns; without this, every lookup stalls
+#    ~20 s in resolver retries before failing (M2.2 measurement). Proxied HTTPS needs no local DNS.
+# 3. No setuid/setgid binaries (cap-drop ALL already neuters them; this removes them outright).
+RUN groupadd --gid 1000 agent \
+ && useradd --uid 1000 --gid 1000 --home-dir /tmp --no-create-home --shell /bin/bash agent \
+ && printf 'passwd: files\ngroup: files\nshadow: files\nhosts: files\nnetworks: files\n' > /etc/nsswitch.conf \
+ && find / -xdev -type f -perm /6000 -exec chmod a-s {} + \
+ && mkdir -p /work /skills /outbox
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    LANG=C.UTF-8
+
+USER 1000:1000
+WORKDIR /work
+CMD ["sleep", "infinity"]

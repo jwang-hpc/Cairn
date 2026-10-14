@@ -2,6 +2,7 @@
 // (DR-0004 seam 1); results are plain data built from the normalized event log.
 import { randomUUID } from "node:crypto";
 import { Agent } from "@earendil-works/pi-agent-core";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import type { AuthKind, EffortLevel, Route, UsageEvent } from "@cairn/shared";
 import { BudgetGovernor, type DailyTotals } from "./budget/governor.js";
 import { type LoadedConfig, loadConfig } from "./config/load.js";
@@ -77,17 +78,23 @@ export class Engine {
     return alias;
   }
 
+  /**
+   * A pi Model object for an alias. pi-agent-core needs one in its state; the layer's streamFn still picks
+   * the real route per call. Internal to the engine (seam 1).
+   */
+  piModelFor(alias: string): Model<Api> {
+    const { model: m, provider } = this.layer.resolve(alias);
+    const piModel = provider.routes.map((r) => this.pi.models[r.auth].getModel(r.pi_provider, m.id)).find((x) => x !== undefined);
+    if (!piModel) throw new Error(`pi-ai knows no route for ${alias} (${m.id}); check models.yaml routes`);
+    return piModel;
+  }
+
   /** One-shot agent call (M1 acceptance): every model call goes through the governor and is recorded. */
   async ask(prompt: string, opts: AskOptions = {}): Promise<AskResult> {
     const alias = opts.alias ?? this.defaultAlias();
     const role = opts.role ?? "triage";
     const runId = randomUUID();
-    const { model: m, provider } = this.layer.resolve(alias);
-    // pi-agent-core needs a Model object; the layer's streamFn picks the real route per call.
-    const piModel = provider.routes
-      .map((r) => this.pi.models[r.auth].getModel(r.pi_provider, m.id))
-      .find((x) => x !== undefined);
-    if (!piModel) throw new Error(`pi-ai knows no route for ${alias} (${m.id}); check models.yaml routes`);
+    const piModel = this.piModelFor(alias);
 
     const run = await this.governor.startRun(role, runId);
     const spec: CallSpec = {

@@ -171,9 +171,33 @@ export const EngineConfig = Type.Object(
       },
       strict,
     ),
+    /** Agent sandboxes (DR-0005). */
+    agent: Type.Optional(
+      Type.Object(
+        {
+          /** Agent image built from containers/agent (ideally pinned by digest). Default: cairn-agent:dev. */
+          image: Type.Optional(NonEmpty),
+          /** Wall-clock limit for one worker run, in minutes. Default: 15. */
+          max_minutes: Type.Optional(PositiveInt),
+        },
+        strict,
+      ),
+    ),
   },
   strict,
 );
+
+/** report.json an agent writes to /outbox (DR-0004 seam 2: judge by artifacts, not transcripts). */
+export const WorkerReport = Type.Object(
+  {
+    status: Type.Union([Type.Literal("done"), Type.Literal("failed"), Type.Literal("needs_input")]),
+    summary: Type.String({ minLength: 1, maxLength: 4000 }),
+    notes: Type.Optional(Type.String({ maxLength: 20000 })),
+    questions: Type.Optional(Type.Array(Type.String({ maxLength: 2000 }), { maxItems: 20 })),
+  },
+  { additionalProperties: false },
+);
+export type WorkerReport = Type.Static<typeof WorkerReport>;
 
 export type Route = Type.Static<typeof Route>;
 export type ProviderConfig = Type.Static<typeof ProviderConfig>;

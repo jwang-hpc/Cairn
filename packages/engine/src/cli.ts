@@ -1,8 +1,12 @@
 import { parseArgs } from "node:util";
 import { EFFORT_LEVELS, type EffortLevel, FORMAT_VERSION } from "@cairn/shared";
+import { readFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { ConfigError } from "./config/load.js";
 import { Engine, type LoginIo, type Status } from "./engine.js";
-import { type EnginePaths, resolvePaths } from "./paths.js";
+import { type EnginePaths, REPO_ROOT, resolvePaths } from "./paths.js";
+import type { WorkerDeps } from "./worker/run.js";
+import { runTask } from "./worker/task.js";
 import { ENGINE_VERSION } from "./version.js";
 
 export interface CliIo {
@@ -17,6 +21,8 @@ export interface CliIo {
 export interface CliDeps {
   env?: NodeJS.ProcessEnv;
   openEngine?: (paths: EnginePaths) => Promise<Engine>;
+  /** Overrides for `re run` (tests inject a fake sandbox launcher). */
+  worker?: Partial<Omit<WorkerDeps, "engine">>;
 }
 
 const USAGE = `usage: re <command> [options]
@@ -26,6 +32,9 @@ commands:
                                         (--check: one-word test call per route)
   ask [--model A] [--effort E] [--role R] <prompt...>
                                         one-shot agent call; recorded in usage.jsonl
+  run --repo P --role R --task FILE [--model A] [--effort E] [--keep]
+                                        agent in its own worktree + sandbox; changes are
+                                        committed to branch agent/<id> for review
   login <pi-provider> <oauth|api_key>   sign in or store an API key (run in your own terminal)
   help                                  show this message
 
@@ -52,6 +61,9 @@ export async function runCli(argv: readonly string[], io: CliIo, deps: CliDeps =
         model: { type: "string", short: "m" },
         effort: { type: "string", short: "e" },
         role: { type: "string", short: "r" },
+        repo: { type: "string" },
+        task: { type: "string" },
+        keep: { type: "boolean" },
       },
       allowPositionals: true,
       strict: true,
@@ -72,7 +84,7 @@ export async function runCli(argv: readonly string[], io: CliIo, deps: CliDeps =
     io.out(USAGE);
     return 0;
   }
-  if (!["status", "ask", "login"].includes(command)) {
+  if (!["status", "ask", "run", "login"].includes(command)) {
     io.err(`re: unknown command '${command}'`);
     io.err(USAGE);
     return 2;
@@ -105,6 +117,27 @@ export async function runCli(argv: readonly string[], io: CliIo, deps: CliDeps =
       }
       return ask(engine, io, prompt, { model: v.model, effort: v.effort as EffortLevel | undefined, role: v.role });
     }
+    case "run": {
+      if (!v.repo || !v.role || !v.task) {
+        io.err("usage: re run --repo <git repo> --role <role> --task <file> [--model A] [--effort E] [--keep]");
+        return 2;
+      }
+      if (v.effort !== undefined && !(EFFORT_LEVELS as readonly string[]).includes(v.effort)) {
+        io.err(`re run: --effort must be one of ${EFFORT_LEVELS.join(", ")}`);
+        return 2;
+      }
+      let task: string;
+      try {
+        task = await readFile(resolve(v.task), "utf8");
+      } catch (e) {
+        io.err(`re run: cannot read task file: ${(e as Error).message}`);
+        return 2;
+      }
+      return run(engine, io, deps.worker, {
+        repo: resolve(v.repo), role: v.role, task, keep: v.keep === true,
+        ...(v.model ? { alias: v.model } : {}), ...(v.effort ? { effort: v.effort as EffortLevel } : {}),
+      });
+    }
     case "login": {
       const [provider, kind] = rest;
       if (!provider || (kind !== "oauth" && kind !== "api_key")) {
@@ -128,6 +161,37 @@ export async function runCli(argv: readonly string[], io: CliIo, deps: CliDeps =
     }
   }
   return 2;
+}
+
+async function run(
+  engine: Engine,
+  io: CliIo,
+  overrides: CliDeps["worker"],
+  opts: Parameters<typeof runTask>[1],
+): Promise<number> {
+  io.err(`re run: role ${opts.role} on ${opts.repo} (sandbox + worktree; this can take a while)`);
+  let out;
+  try {
+    out = await runTask({ engine, skillsDir: join(REPO_ROOT, "skills"), ...overrides }, opts);
+  } catch (e) {
+    io.err(`re run: ${(e as Error).message}`);
+    return 1;
+  }
+  const { result: r, worktree, commit, kept } = out;
+  io.out(`status   ${r.status}${r.error ? ` (${r.error.split("\n")[0]})` : ""}`);
+  io.out(`summary  ${r.report.summary.split("\n")[0]}${r.reportSource === "engine" ? "  [no report.json; taken from last message]" : ""}`);
+  for (const q of r.report.questions ?? []) io.out(`question ${q}`);
+  io.out(`changed  ${r.files.length === 0 ? "nothing" : r.files.map((f) => `${f.path} (${f.status})`).join(", ")}`);
+  if (r.violations.length > 0) io.out(`VIOLATION changes outside the role's write paths: ${r.violations.join(", ")}`);
+  for (const u of r.usage) {
+    io.err(`— ${u.model} via ${u.route}/${u.auth} · effort ${u.effort} · ${tok(u.tokens.input)} in / ${tok(u.tokens.output)} out · ${usd(u.cost.usd)} ${u.cost.kind}${u.error ? ` · failed: ${u.error.split("\n")[0]}` : ""}`);
+  }
+  io.out(`run      ${r.run} · transcript ${r.transcriptPath}`);
+  if (commit) {
+    io.out(`review   git -C ${worktree.repo} diff ${worktree.base.slice(0, 12)}...${worktree.branch}   (commit ${commit.slice(0, 12)})`);
+  }
+  if (kept) io.out(`worktree ${worktree.path} (kept)`);
+  return r.status === "done" ? 0 : r.status === "needs_input" ? 3 : 1;
 }
 
 async function ask(

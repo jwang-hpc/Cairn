@@ -121,3 +121,21 @@ export async function removeWorktree(ref: WorktreeRef, opts: { deleteBranch?: bo
     if (known.trim() !== "") await git(ref.repo, ["branch", "-D", ref.branch]);
   }
 }
+
+/** Identity for agent commits; never the user's (their name/email stay theirs). */
+export const AGENT_AUTHOR = { name: "Cairn agent", email: "agent@cairn.invalid" } as const;
+
+/**
+ * Commit everything the agent changed on its branch, so the user can review with
+ * `git diff <base>...agent/<id>` after the worktree directory is removed. Returns the commit, or undefined
+ * if there was nothing to commit.
+ */
+export async function commitWorktree(ref: WorktreeRef, message: string): Promise<string | undefined> {
+  await git(ref.path, ["add", "--all"]);
+  if ((await git(ref.path, ["diff", "--cached", "--name-only", ref.base])).trim() === "") return undefined;
+  await git(ref.path, [
+    "-c", `user.name=${AGENT_AUTHOR.name}`, "-c", `user.email=${AGENT_AUTHOR.email}`, "-c", "commit.gpgsign=false",
+    "commit", "--quiet", "--no-verify", "-m", message,
+  ]);
+  return (await git(ref.path, ["rev-parse", "HEAD"])).trim();
+}
