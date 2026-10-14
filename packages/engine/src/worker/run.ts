@@ -73,7 +73,7 @@ const DEFAULT_MAX_MINUTES = 15;
 function systemPrompt(role: string, sb: Sandbox, executorTools: string[]): string {
   const mounts = sb.spec.mounts
     .filter((m) => m.target.startsWith("/work/"))
-    .map((m) => `  - ${m.target}${m.kind === "dir" ? "/" : ""} (${m.readonly ? "read-only" : "writable"})`)
+    .map((m) => `  - ${m.target}${m.kind === "dir" ? "/" : ""} (${m.readonly ? "read-only" : "writable"}${m.files ? `; only ${m.files.join(", ")}` : ""})`)
     .join("\n");
   const net =
     sb.spec.egressDomains.length > 0

@@ -1,9 +1,9 @@
 // Host-side mount preparation. The argv allowlist checks paths as strings; this checks what they point to:
 // a mount source that is (or passes through) a symlink resolving outside its root is refused, so a committed
 // `logic -> ~/.ssh` symlink in a project can't expose host files (invariant 2).
-import { lstat, mkdir, realpath } from "node:fs/promises";
-import { dirname, resolve, sep } from "node:path";
-import type { ContainerSpec, Mount } from "./policy.js";
+import { chmod, copyFile, lstat, mkdir, realpath, rm } from "node:fs/promises";
+import { dirname, join, posix, resolve, sep } from "node:path";
+import { type ContainerSpec, type Mount, WORK } from "./policy.js";
 
 export class MountError extends Error {
   constructor(message: string) {
@@ -43,13 +43,24 @@ export interface PreparedMounts {
   roots: string[];
 }
 
+export interface MountRoots {
+  worktree: string;
+  skills: string;
+  outbox: string;
+  /**
+   * Host directory for staged copies of read-only role files (Apple container mounts directories only). Must not be
+   * inside the outbox (that one is writable). Removed and recreated on every launch.
+   */
+  staging?: string;
+}
+
 /**
  * Resolve and check every mount source against its root, create missing directories, drop missing read-only
  * files. Returns a spec whose mount sources are real paths.
  *
  * roots: worktree (role mounts), skills, outbox. Each mount must stay inside the root it was derived from.
  */
-export async function prepareMounts(spec: ContainerSpec, roots: { worktree: string; skills: string; outbox: string }): Promise<PreparedMounts> {
+export async function prepareMounts(spec: ContainerSpec, roots: MountRoots): Promise<PreparedMounts> {
   await mkdir(roots.outbox, { recursive: true, mode: 0o700 });
   const real = {
     worktree: await realpath(roots.worktree).catch(() => {
@@ -93,5 +104,57 @@ export async function prepareMounts(spec: ContainerSpec, roots: { worktree: stri
     if (m.kind === "file" && !st.isFile()) throw new MountError(`${m.target}: ${m.source} is not a regular file`);
     mounts.push({ ...m, source: target });
   }
-  return { spec: { ...spec, mounts }, skipped, roots: [real.worktree, real.skills, real.outbox] };
+  const staged = await stageFiles(mounts, roots);
+  return { spec: { ...spec, mounts: staged.mounts }, skipped, roots: [real.worktree, real.skills, real.outbox, ...(staged.root ? [staged.root] : [])] };
+}
+
+/**
+ * Apple container bind-mounts directories only (virtiofs), so a read-only role file (e.g. logic/experiments.md)
+ * is copied into a per-agent staging directory and that directory is mounted read-only at the file's parent.
+ * The agent sees exactly the role's files there, nothing else from the parent (DR-0005: mount subsets of the
+ * worktree). Writable file mounts can't work this way and are refused.
+ */
+async function stageFiles(mounts: Mount[], roots: MountRoots): Promise<{ mounts: Mount[]; root?: string }> {
+  const files = mounts.filter((m) => m.kind === "file");
+  if (files.length === 0) return { mounts };
+  const writable = files.find((m) => !m.readonly);
+  if (writable) throw new MountError(`${writable.target}: writable file mounts are not supported (the container runtime mounts directories only); list a directory in roles.yaml`);
+  if (!roots.staging) throw new MountError(`${files[0]!.target}: read-only file mounts need a staging directory`);
+  const staging = resolve(roots.staging);
+  if (inside(staging, resolve(roots.outbox)) || inside(staging, resolve(roots.worktree)) || inside(staging, resolve(roots.skills))) {
+    throw new MountError(`staging directory ${staging} must not be inside the outbox, worktree, or skills`);
+  }
+  await rm(staging, { recursive: true, force: true });
+  await mkdir(staging, { recursive: true, mode: 0o700 });
+  const realStaging = await realpath(staging);
+  const dirs = mounts.filter((m) => m.kind === "dir");
+  const covered = (target: string) => dirs.some((d) => target === d.target || target.startsWith(`${d.target}/`));
+  const groups = new Map<string, Mount[]>();
+  for (const f of files) {
+    if (covered(f.target)) continue; // already visible through a directory mount
+    const parent = posix.dirname(f.target);
+    groups.set(parent, [...(groups.get(parent) ?? []), f]);
+  }
+  const staged: Mount[] = [];
+  for (const [parent, group] of groups) {
+    const rel = posix.relative(WORK, parent);
+    if (rel === "" || rel.startsWith("..")) throw new MountError(`${group[0]!.target}: files directly under ${WORK} can't be staged; list a directory`);
+    const dir = join(realStaging, ...rel.split("/"));
+    await mkdir(dir, { recursive: true, mode: 0o700 });
+    for (const f of group) {
+      const dest = join(dir, posix.basename(f.target));
+      await copyFile(f.source, dest);
+      await chmod(dest, 0o444);
+    }
+    // Mount points for directory mounts nested under this parent (the staged mount is read-only).
+    for (const d of dirs) if (d.target.startsWith(`${parent}/`)) await mkdir(join(dir, ...posix.relative(parent, d.target).split("/")), { recursive: true });
+    staged.push({ source: dir, target: parent, readonly: true, kind: "dir", files: group.map((f) => posix.basename(f.target)) });
+  }
+  // Keep the role's order; a staged parent goes before any mount nested under it.
+  const out = [...dirs];
+  for (const m of staged) {
+    const i = out.findIndex((d) => d.target.startsWith(`${m.target}/`));
+    out.splice(i === -1 ? out.length : i, 0, m);
+  }
+  return { mounts: out, root: realStaging };
 }

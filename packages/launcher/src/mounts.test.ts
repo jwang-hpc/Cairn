@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RolesConfig } from "@cairn/shared";
@@ -73,6 +73,36 @@ describe("prepareMounts", () => {
     await expect(prepareMounts(spec([], ["notes.md"]), roots())).rejects.toThrow(/writable file mount .* does not exist/);
     await writeFile(join(worktree, "evidence"), "not a dir");
     await expect(prepareMounts(spec(["evidence/"]), roots())).rejects.toThrow(/is not a directory/);
+  });
+
+  it("stages read-only files as a read-only directory holding only those files (the runtime mounts directories only)", async () => {
+    await writeFile(join(worktree, "logic", "experiments.md"), "# Experiments\n");
+    await writeFile(join(worktree, "logic", "hypotheses.md"), "not for this role\n");
+    await mkdir(join(worktree, "logic", "solution"), { recursive: true });
+    const staging = join(base, "outbox", "t1.ro");
+    const p = await prepareMounts(spec(["logic/experiments.md", "logic/solution/", "src/"]), { ...roots(), staging });
+    const realStaging = await realpath(staging);
+    const logic = p.spec.mounts.find((m) => m.target === "/work/logic")!;
+    expect(logic).toEqual({ source: join(realStaging, "logic"), target: "/work/logic", readonly: true, kind: "dir", files: ["experiments.md"] });
+    expect(await readdir(join(realStaging, "logic"))).toEqual(["experiments.md", "solution"]); // solution/: mount point only
+    expect(await readFile(join(realStaging, "logic", "experiments.md"), "utf8")).toBe("# Experiments\n");
+    expect((await stat(join(realStaging, "logic", "experiments.md"))).mode & 0o777).toBe(0o444);
+    // Parents before nested mounts; no single-file mount reaches the runtime.
+    const targets = p.spec.mounts.map((m) => m.target);
+    expect(targets.indexOf("/work/logic")).toBeLessThan(targets.indexOf("/work/logic/solution"));
+    expect(p.spec.mounts.every((m) => m.kind === "dir")).toBe(true);
+    expect(p.roots).toContain(realStaging);
+    expect(() => validateRunArgv(toRunArgv(p.spec, { roots: p.roots, network: "cairn-net-t1" }), { roots: p.roots, network: "cairn-net-t1" })).not.toThrow();
+  });
+
+  it("a file already inside a mounted directory isn't staged; writable files and a staging dir inside the outbox are refused", async () => {
+    await writeFile(join(worktree, "logic", "experiments.md"), "x");
+    const staging = join(base, "staging");
+    const p = await prepareMounts(spec(["logic/", "logic/experiments.md"]), { ...roots(), staging });
+    expect(p.spec.mounts.filter((m) => m.target.startsWith("/work/")).map((m) => m.target)).toEqual(["/work/logic"]);
+    await writeFile(join(worktree, "notes.md"), "x");
+    await expect(prepareMounts(spec([], ["notes.md"]), { ...roots(), staging })).rejects.toThrow(/writable file mounts are not supported/);
+    await expect(prepareMounts(spec(["logic/experiments.md"]), { ...roots(), staging: join(outbox, "ro") })).rejects.toThrow(/must not be inside the outbox/);
   });
 
   it("requires the worktree and skills to exist", async () => {
