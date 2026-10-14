@@ -10,6 +10,8 @@ import { ConfigError } from "./config/load.js";
 import { EVIDENCE_COMMANDS, EVIDENCE_OPTIONS, EVIDENCE_USAGE, runEvidenceCommand } from "./evidence/commands.js";
 import type { ParserRunner } from "./evidence/parse.js";
 import { JOB_COMMANDS, JOB_OPTIONS, JOB_USAGE, runJobCommand } from "./jobs/commands.js";
+import { LITERATURE_COMMANDS, LITERATURE_OPTIONS, LITERATURE_USAGE, runLiteratureCommand } from "./literature/commands.js";
+import { type LiteratureDeps, openLiteratureService } from "./literature/literature.js";
 import { openJobService } from "./jobs/jobs.js";
 import { LEDGER_COMMANDS, LEDGER_OPTIONS, LEDGER_USAGE, openCurrentProject, runLedgerCommand } from "./ledger/commands.js";
 import { PANEL_OPTIONS, PANEL_USAGE, runPanelCommand } from "./panel/commands.js";
@@ -26,6 +28,8 @@ export interface CliIo {
   write?(chunk: string): void;
   /** Interactive input for `re login`. */
   login?: LoginIo;
+  /** stdin is a terminal: commands may ask questions instead of failing on a missing answer. */
+  interactive?: boolean;
 }
 
 export interface CliDeps {
@@ -35,6 +39,8 @@ export interface CliDeps {
   worker?: Partial<Omit<WorkerDeps, "engine">>;
   /** Overrides for the jobs service (tests inject a local transport). */
   jobs?: Partial<JobServiceOptions>;
+  /** Literature proxy overrides (tests inject a fake fetch). */
+  literature?: LiteratureDeps;
   /** Parser runner (tests run parsers on the host). */
   parsers?: ParserRunner;
   /** `re serve` runs until this settles (default: SIGINT or SIGTERM). */
@@ -68,6 +74,8 @@ ${EVIDENCE_USAGE}
 
 ${CLAIM_USAGE}
 
+${LITERATURE_USAGE}
+
 options:
   --version   print engine version
 
@@ -100,6 +108,7 @@ export async function runCli(argv: readonly string[], io: CliIo, deps: CliDeps =
         ...JOB_OPTIONS,
         ...CLAIM_OPTIONS,
         ...EVIDENCE_OPTIONS,
+        ...LITERATURE_OPTIONS,
       },
       allowPositionals: true,
       strict: true,
@@ -120,7 +129,7 @@ export async function runCli(argv: readonly string[], io: CliIo, deps: CliDeps =
     io.out(USAGE);
     return 0;
   }
-  if (![...["status", "ask", "run", "login", "panel", "serve"], ...LEDGER_COMMANDS, ...JOB_COMMANDS, ...CLAIM_COMMANDS, ...EVIDENCE_COMMANDS].includes(command)) {
+  if (![...["status", "ask", "run", "login", "panel", "serve"], ...LEDGER_COMMANDS, ...JOB_COMMANDS, ...CLAIM_COMMANDS, ...EVIDENCE_COMMANDS, ...LITERATURE_COMMANDS].includes(command)) {
     io.err(`re: unknown command '${command}'`);
     io.err(USAGE);
     return 2;
@@ -139,11 +148,15 @@ export async function runCli(argv: readonly string[], io: CliIo, deps: CliDeps =
   }
 
   if (command === "panel") return runPanelCommand(engine, rest, v, io, deps.env ?? process.env);
+  if ((LITERATURE_COMMANDS as readonly string[]).includes(command)) {
+    return runLiteratureCommand(engine, rest, v, { ...io, ...(io.login ? { ask: (q: string, secret: boolean) => io.login!.ask(q, secret) } : {}) }, deps.literature, deps.env ?? process.env);
+  }
   if ((EVIDENCE_COMMANDS as readonly string[]).includes(command)) return runEvidenceCommand(engine, rest, v, io, deps.env ?? process.env, deps.parsers);
   if ((CLAIM_COMMANDS as readonly string[]).includes(command)) return runClaimCommand(engine, rest, v, io, deps.env ?? process.env);
   if ((JOB_COMMANDS as readonly string[]).includes(command)) return runJobCommand(engine, command, rest, v, io, deps.env ?? process.env, deps.jobs);
   if ((LEDGER_COMMANDS as readonly string[]).includes(command)) {
-    return runLedgerCommand(engine, command, rest, v, io, deps.env ?? process.env);
+    const ask = io.interactive && io.login ? { ask: (q: string) => io.login!.ask(q, false) } : {};
+    return runLedgerCommand(engine, command, rest, v, { ...io, ...ask }, deps.env ?? process.env);
   }
 
   switch (command) {
@@ -194,7 +207,7 @@ export async function runCli(argv: readonly string[], io: CliIo, deps: CliDeps =
         io.err(`re run: cannot read task file: ${(e as Error).message}`);
         return 2;
       }
-      return run(engine, io, { jobs: openJobService(engine, deps.jobs), ...deps.worker }, {
+      return run(engine, io, { jobs: openJobService(engine, deps.jobs), literature: await openLiteratureService(engine, deps.literature), ...deps.worker }, {
         repo, role: v.role, task, keep: v.keep === true,
         ...(v.model ? { alias: v.model } : {}), ...(v.effort ? { effort: v.effort as EffortLevel } : {}),
       });
@@ -292,6 +305,7 @@ async function run(
       io.out(`claim    ${worktree.branch}:${f.path}   check: re claim check ${worktree.branch}:${f.path}`);
     }
   }
+  if (commit && r.files.some((f) => f.path.startsWith("lit/"))) io.out(`lit      re literature check ${worktree.branch}   then: re literature accept ${worktree.branch}`);
   for (const j of (await overrides?.jobs?.list().catch(() => [])) ?? []) {
     if (j.author.kind === "agent" && j.author.run === r.run) io.out(`job      ${j.id} ${j.state} (${j.experiment} → ${j.target})  review: re job show ${j.id}`);
   }

@@ -12,7 +12,7 @@ project/
                                       versions, allocation)
   trace/  exploration_tree.yaml       decisions and dead ends (first-class nodes)
   evidence/ tables/ figures/ raw/     written only by parsers and the executor
-  lit/    notes/<paper-id>.md  refs.bib   (citations must resolve to DOI/DBLP)
+  lit/    notes/<paper-id>.md  refs.bib   (citations must resolve to a DOI or arXiv id; DR-0006 M7 amendment)
   drafts/
   engine/ panels/ campaigns/ requests/ audit.log usage.jsonl decisions.md
 ```

@@ -23,7 +23,7 @@ const session = (over: Partial<ExecutorSession> = {}): ExecutorSession => ({
 });
 
 async function connect(s: ExecutorSession, token: string, opts: { url?: string; header?: string } = {}) {
-  const endpoint = createExecutorEndpoint({ service, session: s, token });
+  const endpoint = createExecutorEndpoint({ jobs: service, session: s, token });
   const client = new McpClient({ name: "test", version: "0" });
   await client.connect(
     new StreamableHttpTransport({
@@ -57,7 +57,7 @@ afterEach(async () => {
 
 describe("executor tools over MCP (DR-0004 seam 4, DR-0005 escape seeds)", () => {
   it("wraps only the role's tools, with provider-safe names and the machine list in the description", async () => {
-    const ex = await connectExecutorTools(service, session());
+    const ex = await connectExecutorTools({ jobs: service }, session());
     try {
       expect(ex.tools.map((t) => t.name)).toEqual(["mcp_jobs_submit", "mcp_jobs_status"]);
       expect([...ex.names]).toEqual([["mcp_jobs_submit", "jobs.submit"], ["mcp_jobs_status", "jobs.status"]]);

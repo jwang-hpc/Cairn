@@ -36,9 +36,35 @@ async function re(...argv: string[]) {
   return { code, out: out.join("\n"), err: err.join("\n") };
 }
 
+describe("re project new asks for the data class (DR-0013)", () => {
+  it("never defaults it: an error without a terminal, a question with one", async () => {
+    const r = await re("project", "new", "x", "--title", "X");
+    expect(r.code).toBe(2);
+    expect(r.err).toMatch(/say whether this project's data is open: --data-class public \| unpublished \| restricted/);
+    expect(r.err).toMatch(/public {7}open data/);
+    expect((await re("project", "list")).out).toBe("(no projects)");
+    const asked: string[] = [];
+    const answer = (a: string) => async (...argv: string[]) => {
+      const out: string[] = [];
+      const err: string[] = [];
+      const login = { show: () => {}, ask: async (q: string) => (asked.push(q), a), choose: async () => "public" };
+      const code = await runCli(argv, { out: (l) => out.push(l), err: (l) => err.push(l), interactive: true, login }, { openEngine: async () => engine, env: {} });
+      return { code, out: out.join("\n"), err: err.join("\n") };
+    };
+    const yes = await answer(" Public ")("project", "new", "open1", "--title", "Open data");
+    expect(yes.code).toBe(0);
+    expect(yes.out).toMatch(/^Is this project's data open\?/);
+    expect(yes.out).toMatch(/created open1 \(public\)/);
+    expect(asked).toEqual(["data class (public, unpublished, or restricted):"]);
+    expect(await answer("")("project", "new", "blank", "--title", "B")).toMatchObject({ code: 2, err: expect.stringContaining("no data class given; nothing created") });
+    expect(await answer("open")("project", "new", "typo", "--title", "T")).toMatchObject({ code: 2 });
+    expect((await re("project", "list")).out).toBe("* open1  [public]");
+  });
+});
+
 describe("re project / hypothesis / trace / tree / decision / ledger (M3 acceptance, offline)", () => {
   it("runs the M3 flow end to end and every write is tagged", async () => {
-    expect((await re("project", "new", "lossy-io", "--title", "Lossy compression for HPC I/O")).out).toMatch(/^created lossy-io \(unpublished\) at .*projects\/lossy-io\ncurrent project: lossy-io$/);
+    expect((await re("project", "new", "lossy-io", "--title", "Lossy compression for HPC I/O", "--data-class", "unpublished")).out).toMatch(/^created lossy-io \(unpublished\) at .*projects\/lossy-io\ncurrent project: lossy-io$/);
     const add = await re(
       "hypothesis", "add", "--title", "SZ3 cuts checkpoint time",
       "--statement", "SZ3 at 1e-3 relative error reduces checkpoint write time on Lustre.",
@@ -77,8 +103,8 @@ describe("re project / hypothesis / trace / tree / decision / ledger (M3 accepta
   });
 
   it("--project overrides the current project", async () => {
-    await re("project", "new", "a", "--title", "A");
-    await re("project", "new", "b", "--title", "B");
+    await re("project", "new", "a", "--title", "A", "--data-class", "public");
+    await re("project", "new", "b", "--title", "B", "--data-class", "public");
     await re("trace", "add", "question", "--title", "in a", "--description", "d", "--project", "a");
     expect((await re("tree", "--project", "a")).out).toContain("in a");
     expect((await re("tree")).out).toBe("(empty exploration tree)"); // current is b

@@ -49,7 +49,7 @@ const CLAIM_GATED = new Set([CLAIMS]);
 /** The claim gate's own commits; only approveClaim uses it. */
 const GATE_OP = "claim-gate";
 /** Where engine artifacts may be written via writeArtifacts(): panel rounds, job records, executor evidence, parser tables. */
-const ARTIFACT_AREAS = ["engine/panels/", "engine/jobs/", "evidence/raw/", "evidence/tables/", "engine/claims/reviews/"];
+const ARTIFACT_AREAS = ["engine/panels/", "engine/jobs/", "evidence/raw/", "evidence/tables/", "engine/claims/reviews/", "lit/"];
 
 const pad = (n: number) => String(n).padStart(2, "0");
 /** ARA timestamp: local "YYYY-MM-DDTHH:MM". */
@@ -304,21 +304,41 @@ export class Ledger {
    * Engine artifacts (panel rounds, job records, and executor evidence under evidence/raw/, DR-0007). One tagged commit
    * per call; paths outside the artifact areas are refused.
    */
-  async writeArtifacts(files: { path: string; content: string | Uint8Array }[], prov: Provenance, summary: string, op = "write-artifact"): Promise<void> {
+  async writeArtifacts(files: { path: string; content: string | Uint8Array }[], prov: Provenance, summary: string, op = "write-artifact", remove: string[] = []): Promise<void> {
     this.#requireProvenance(prov);
-    if (files.length === 0) throw new LedgerError("nothing to write");
-    const paths: string[] = [];
-    for (const f of files) {
-      const p = posix.normalize(f.path);
+    if (files.length === 0 && remove.length === 0) throw new LedgerError("nothing to write");
+    const area = (raw: string) => {
+      const p = posix.normalize(raw);
       // Check the raw path too: normalize() would turn evidence/raw/a/../../engine/x into an allowed-looking path.
-      if (f.path.split("/").some((seg) => seg === ".." || seg === ".") || f.path.startsWith("/") || p.split("/").includes("..") || !ARTIFACT_AREAS.some((a) => p.startsWith(a))) {
-        throw new LedgerError(`artifacts may only be written under ${ARTIFACT_AREAS.join(", ")}: ${f.path}`);
+      if (raw.split("/").some((seg) => seg === ".." || seg === ".") || raw.startsWith("/") || p.split("/").includes("..") || !ARTIFACT_AREAS.some((a) => p.startsWith(a))) {
+        throw new LedgerError(`artifacts may only be written under ${ARTIFACT_AREAS.join(", ")}: ${raw}`);
       }
-      await mkdir(dirname(join(this.dir, p)), { recursive: true });
-      await writeFile(join(this.dir, p), f.content);
+      return p;
+    };
+    const targets = files.map((f) => ({ p: area(f.path), content: f.content }));
+    const gone = remove.map(area);
+    const paths: string[] = [];
+    for (const t of targets) {
+      await mkdir(dirname(join(this.dir, t.p)), { recursive: true });
+      await writeFile(join(this.dir, t.p), t.content);
+      paths.push(t.p);
+    }
+    // Removals (only tracked files; an artifact area is never emptied by accident), restored if the commit fails.
+    const removed: { p: string; content: Buffer }[] = [];
+    for (const p of gone) {
+      const content = await readFile(join(this.dir, p)).catch(() => undefined);
+      if (content === undefined) continue;
+      await rm(join(this.dir, p));
+      removed.push({ p, content });
       paths.push(p);
     }
-    await this.#commit(op, paths[0]!, undefined, prov, summary, paths);
+    if (paths.length === 0) throw new LedgerError("nothing to write");
+    try {
+      await this.#commit(op, paths[0]!, undefined, prov, summary, paths);
+    } catch (e) {
+      for (const r of removed) await writeFile(join(this.dir, r.p), r.content);
+      throw e;
+    }
   }
 
   /**

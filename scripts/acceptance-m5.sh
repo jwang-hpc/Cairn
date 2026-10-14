@@ -23,7 +23,7 @@ if grep -q "^$TARGET .*NO SCRATCH" "$OUT"; then echo "FAIL: set machines.$TARGET
 echo "== project $PROJECT"
 re project use "$PROJECT" > /dev/null 2>&1 && PROJECTS="$(dirname "$(re project | sed 's|^[^/]*||')")" || PROJECTS=""
 if [ -n "$PROJECTS" ]; then case "$PROJECTS" in /*) rm -rf "${PROJECTS:?}/$PROJECT" ;; *) echo "bad projects dir: $PROJECTS" >&2; exit 1 ;; esac; fi
-re project new "$PROJECT" --title "M5 acceptance: agent-authored job on $TARGET"
+re project new "$PROJECT" --title "M5 acceptance: agent-authored job on $TARGET" --data-class unpublished
 re project use "$PROJECT"
 
 cat > "$TASK" <<EOF

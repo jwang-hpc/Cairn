@@ -62,3 +62,6 @@ Tool-using roles (coder, analysis, literature) only use models that pass the too
   `reasoning.effort` on both routes. Recorded in `config/models.example.yaml`.
 - **Data governance** is enforced in the model layer (M1.6): a refused data class sends nothing and is
   logged as a policy-denied `approval` event.
+- **Declared at creation, never defaulted (2026-10-14):** `re project new` takes `--data-class`, or asks for it in a
+  terminal; without one it creates nothing. Most projects hold open science data (`public`), but only the user can
+  say so. `projects_default_data_class` applies only to calls outside any project (`re ask`, a run on a plain repo).

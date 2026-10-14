@@ -1,8 +1,8 @@
 roles:
   literature:
     mounts: { read: [lit/, logic/], write: [lit/] }
-    network: [literature-proxy]
-    executor_tools: [literature.search, literature.fetch]
+    network: []   # scholarly APIs are reached only through the host-side literature.* tools
+    executor_tools: [literature.search, literature.fetch, literature.resolve, literature.expand]
   coder:
     mounts: { read: [src/, logic/experiments.md], write: [src/, experiments/] }
     network: [pypi.org, files.pythonhosted.org, registry.npmjs.org]

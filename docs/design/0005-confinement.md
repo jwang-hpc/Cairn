@@ -17,7 +17,7 @@ Status: Accepted (2026-10-13)
 ## Roles (config/roles.yaml)
 | Role | Read | Write | Network | Executor tools |
 |---|---|---|---|---|
-| literature | lit/, logic/ | lit/ | literature API proxy only | literature.* |
+| literature | lit/, logic/ | lit/ | none (literature.* tools on the host; DR-0006 M7 amendment) | literature.* |
 | coder | src/, logic/experiments.md | src/, experiments/ | package registries | jobs.submit (approval) |
 | analysis | evidence/, logic/ | analysis/, draft claims | none | jobs.fetch_results |
 | panel | context packet only | own response file | none | none |

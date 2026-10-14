@@ -81,3 +81,54 @@ Same executor interface; thresholds may allow auto-approval for small jobs.
   looked up (`.cairn/runner.pid`, or `squeue/sacct --name cairn-<job>`) and adopted, never run twice. A scheduler
   error leaves the state unchanged ("unknown"); `lost` is re-checked on the next status. Cards and CLI output
   escape control characters; files with NUL bytes are flagged and still scanned.
+
+## Amendment (2026-10-14): M7 literature tools
+- **Sources:** Semantic Scholar, OpenAlex, arXiv, and Crossref; doi.org's handle API checks that a DOI is
+  registered. DBLP is deferred: it answered with a bot-check page instead of data. Google Scholar has no API and
+  its terms forbid scraping, so it is linked from notes only (a pasted Scholar BibTeX entry goes through
+  `resolve` like any other citation).
+- **Tools:** `literature.search`, `literature.fetch`, `literature.resolve`, and `literature.expand` (one step of the
+  citation graph). They are host-side and serve the same per-run MCP session as `jobs.*`, filtered by
+  `executor_tools`. No model runs inside them.
+- **Network:** each source is pinned to its single host, and redirects are checked against that host. The user's
+  contact address (`re literature contact`, stored in engine.yaml) goes only to OpenAlex and Crossref, their
+  "polite pool". An optional Semantic Scholar key (`re literature key s2`, `<home>/secrets/literature.json`,
+  mode 0600) goes only to Semantic Scholar.
+- **Protections against throttling and overuse:** per-source pacing, Retry-After handling, a breaker after
+  repeated failures, a stop before OpenAlex's free daily credits run out, a 7-day cache in
+  `<home>/literature-cache/` that never stores the address or the key, and at most 300 tool calls per run.
+- **Untrusted data:** every result is labelled as untrusted external data. Search results carry no
+  abstracts; `fetch` gives an abstract, quoted and clipped to 1,500 characters. Markup and control characters are
+  stripped.
+- **Citations:** references enter `lit/refs.bib` only through `literature.resolve`, which accepts:
+  - a DOI that is registered and has metadata from Crossref, OpenAlex, or arXiv;
+  - an arXiv id that exists;
+  - a title that matches exactly one paper closely.
+
+  The resolve tool appends the BibTeX entry and a line to `lit/resolutions.jsonl`. It does this inside the agent's
+  sandbox, with no symlinks followed and append only. A different work with the same citekey gets a suffix. BibTeX
+  values are plain text: no backslashes or braces survive. This amends DR-0007's "DOI/DBLP" to DOI or arXiv id.
+- **Into the ledger (M7.3):** `re literature check <branch>` reads the branch's `lit/` from git. It re-verifies
+  every `refs.bib` entry against the services: `resolutions.jsonl` is provenance only, since the agent can write it.
+  Each entry must look exactly like what resolve writes, with the same title, year, and first author as the record
+  it names. Every `[@key]` or `\cite{key}` in `lit/notes/` and `logic/related_work.md` must be in `refs.bib`.
+  Per-paper notes are `lit/notes/<citekey>.md`, with frontmatter `paper: doi:…|arxiv:…` and the sections from
+  DR-0009 (missing sections are a warning). Each paper note also carries `relevance: 0-10`: the agent's judgement of
+  the paper against the project's problem, using the rubric in the `literature-review` skill. A malformed score fails
+  the check; a missing one is a warning. `re literature notes [<branch>]` lists the notes, most relevant first.
+- **Preprints:** a preprint and its publication are one reference: the publication, with the arXiv id as its
+  `eprint`. That's what goes into a submission's bibliography.
+  - `resolve` on an arXiv id whose record names a registered journal DOI returns the publication.
+  - `resolve` on a DOI keeps a preprint the publisher names (Crossref `has-preprint`) only after arXiv confirms
+    it.
+  - `check` warns about pairs left in `refs.bib` (same eprint, or same title and first author). `accept` merges
+    them automatically and reports it: the preprint entry goes, its citations are rewritten, and its note becomes
+    the publication's (or is dropped if the publication has one). The merged result is checked again before it is
+    written.
+  - Pairs that differ substantially (title similarity below 0.9, or a different first author) stay separate works.
+- **Accept:** `re literature accept <branch>` runs the check, then writes the checked files as one ledger commit
+  tagged `ai-suggested(<model>, <effort>)`, taken from the run's usage record via the commit's `Cairn-Run` trailer.
+  It is refused if `lit/` changed in the project since the branch started, or if the branch deletes or symlinks
+  anything there. Agent branches are never merged with git: their commits carry no provenance trailer.
+- **Open:** queries go to four public APIs whatever the project's data class. They are short keyword strings, not
+  project data, but whether `restricted` projects may use them is for the user to decide.
