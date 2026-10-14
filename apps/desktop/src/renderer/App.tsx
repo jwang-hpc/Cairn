@@ -111,7 +111,10 @@ export function App(props: { bridge: CairnBridge }) {
       <Header connection={connection} status={status} />
       {connection.state === "failed" && (
         <p className="error banner">
-          {connection.detail}. Start the engine with <code>re serve</code> in a terminal, then reopen the app.
+          {connection.detail}{" "}
+          <button type="button" onClick={() => void props.bridge.reconnect().then(setConnection)}>
+            Retry
+          </button>
         </p>
       )}
       <div className="body">

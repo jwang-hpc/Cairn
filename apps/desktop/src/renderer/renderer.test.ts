@@ -92,6 +92,7 @@ describe("api (over window.cairn)", () => {
         return r.path.endsWith("/deny") ? { status: 400, body: { error: "a denial needs a reason" } } : { status: 200, body: { job: { id: "x" }, jobs: [], projects: [] } };
       },
       connection: async () => ({ state: "connecting", detail: "" }),
+      reconnect: async () => ({ state: "connecting", detail: "" }),
       subscribe: () => () => {},
     };
     const a = api(bridge);
@@ -113,6 +114,7 @@ describe("api (over window.cairn)", () => {
     const bridge: CairnBridge = {
       request: async (r) => (sent.push(r), { status: 200, body: { job: {}, jobs: [], projects: [] } }),
       connection: async () => ({ state: "connecting", detail: "" }),
+      reconnect: async () => ({ state: "connecting", detail: "" }),
       subscribe: () => () => {},
     };
     const a = api(bridge);

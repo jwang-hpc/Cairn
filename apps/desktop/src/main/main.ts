@@ -113,6 +113,7 @@ async function followEvents(): Promise<void> {
   }
 }
 
+let following = false;
 async function connect(): Promise<void> {
   const home = engineHome(REPO, process.env);
   setConnection({ state: "connecting", detail: `looking for the engine in ${home}` });
@@ -124,7 +125,10 @@ async function connect(): Promise<void> {
       stopEngine = () => void child.kill("SIGTERM");
     }
     setConnection({ state: "connected", url: client.info.url, startedByApp: r.child !== undefined });
-    void followEvents();
+    if (!following) {
+      following = true;
+      void followEvents();
+    }
   } catch (e) {
     setConnection({ state: "failed", detail: (e as Error).message });
   }
@@ -146,6 +150,11 @@ else {
     } else protocol.handle(SCHEME, serveRenderer);
 
     ipcMain.handle(IPC.connection, (e) => (fromApp(e) ? connection : { state: "failed", detail: "refused" }));
+    ipcMain.handle(IPC.reconnect, async (e) => {
+      if (!fromApp(e)) return { state: "failed", detail: "refused" };
+      if (connection.state === "failed") await connect();
+      return connection;
+    });
     ipcMain.handle(IPC.request, async (e, raw: unknown) => {
       if (!fromApp(e)) return { status: 403, body: { error: "refused: not the app's page" } };
       if (!client) return { status: 503, body: { error: connection.state === "failed" ? connection.detail : "not connected to the engine yet" } };

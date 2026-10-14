@@ -28,6 +28,8 @@ export type EngineEvent =
 export interface CairnBridge {
   request(r: EngineRequest): Promise<EngineResponse>;
   connection(): Promise<EngineConnection>;
+  /** Try to connect again (after a failure: e.g. the config was fixed, or re serve was started by hand). */
+  reconnect(): Promise<EngineConnection>;
   /** Subscribe to engine events and connection changes; returns an unsubscribe function. */
   subscribe(handlers: { event?: (e: EngineEvent) => void; connection?: (c: EngineConnection) => void }): () => void;
 }
@@ -35,6 +37,7 @@ export interface CairnBridge {
 export const IPC = {
   request: "cairn:request",
   connection: "cairn:connection",
+  reconnect: "cairn:reconnect",
   event: "cairn:event",
   connectionChanged: "cairn:connection-changed",
 } as const;

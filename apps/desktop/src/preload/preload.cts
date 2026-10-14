@@ -7,12 +7,14 @@ import type { CairnBridge, EngineConnection, EngineEvent, EngineRequest } from "
 const { contextBridge, ipcRenderer } = electron;
 const REQUEST = "cairn:request";
 const CONNECTION = "cairn:connection";
+const RECONNECT = "cairn:reconnect";
 const EVENT = "cairn:event";
 const CONNECTION_CHANGED = "cairn:connection-changed";
 
 const bridge: CairnBridge = {
   request: (r: EngineRequest) => ipcRenderer.invoke(REQUEST, r),
   connection: () => ipcRenderer.invoke(CONNECTION),
+  reconnect: () => ipcRenderer.invoke(RECONNECT),
   subscribe(handlers) {
     const onEvent = (_e: IpcRendererEvent, data: EngineEvent) => handlers.event?.(data);
     const onConnection = (_e: IpcRendererEvent, data: EngineConnection) => handlers.connection?.(data);
