@@ -9,3 +9,4 @@ config/*.yaml
 worktrees/
 outbox/
 .engine/
+.claude/settings.local.json
