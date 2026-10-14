@@ -1,0 +1,5 @@
+{
+  "parsers": [
+    { "parser": "csv_summary", "match": "*.csv", "skip": ["*.summary.csv", "*.ratios.csv"] }
+  ]
+}

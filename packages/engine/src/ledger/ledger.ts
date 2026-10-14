@@ -38,8 +38,8 @@ const DECISIONS = "engine/decisions.md";
 const LOG = "engine/ledger.jsonl";
 /** Reserved for the claim gate (invariant 5). */
 const CLAIM_GATED = new Set(["logic/claims.md"]);
-/** Where engine artifacts may be written via writeArtifacts(): panel rounds, job records, executor evidence. */
-const ARTIFACT_AREAS = ["engine/panels/", "engine/jobs/", "evidence/raw/"];
+/** Where engine artifacts may be written via writeArtifacts(): panel rounds, job records, executor evidence, parser tables. */
+const ARTIFACT_AREAS = ["engine/panels/", "engine/jobs/", "evidence/raw/", "evidence/tables/"];
 
 const pad = (n: number) => String(n).padStart(2, "0");
 /** ARA timestamp: local "YYYY-MM-DDTHH:MM". */

@@ -5,6 +5,8 @@ import { join, resolve } from "node:path";
 import type { JobServiceOptions } from "@cairn/executor";
 import { CLAIM_COMMANDS, CLAIM_OPTIONS, CLAIM_USAGE, runClaimCommand } from "./claims/commands.js";
 import { ConfigError } from "./config/load.js";
+import { EVIDENCE_COMMANDS, EVIDENCE_OPTIONS, EVIDENCE_USAGE, runEvidenceCommand } from "./evidence/commands.js";
+import type { ParserRunner } from "./evidence/parse.js";
 import { JOB_COMMANDS, JOB_OPTIONS, JOB_USAGE, runJobCommand } from "./jobs/commands.js";
 import { openJobService } from "./jobs/jobs.js";
 import { LEDGER_COMMANDS, LEDGER_OPTIONS, LEDGER_USAGE, openCurrentProject, runLedgerCommand } from "./ledger/commands.js";
@@ -31,6 +33,8 @@ export interface CliDeps {
   worker?: Partial<Omit<WorkerDeps, "engine">>;
   /** Overrides for the jobs service (tests inject a local transport). */
   jobs?: Partial<JobServiceOptions>;
+  /** Parser runner (tests run parsers on the host). */
+  parsers?: ParserRunner;
 }
 
 const USAGE = `usage: re <command> [options]
@@ -52,6 +56,8 @@ ${LEDGER_USAGE}
 ${PANEL_USAGE}
 
 ${JOB_USAGE}
+
+${EVIDENCE_USAGE}
 
 ${CLAIM_USAGE}
 
@@ -85,6 +91,7 @@ export async function runCli(argv: readonly string[], io: CliIo, deps: CliDeps =
         ...PANEL_OPTIONS,
         ...JOB_OPTIONS,
         ...CLAIM_OPTIONS,
+        ...EVIDENCE_OPTIONS,
       },
       allowPositionals: true,
       strict: true,
@@ -105,7 +112,7 @@ export async function runCli(argv: readonly string[], io: CliIo, deps: CliDeps =
     io.out(USAGE);
     return 0;
   }
-  if (![...["status", "ask", "run", "login", "panel"], ...LEDGER_COMMANDS, ...JOB_COMMANDS, ...CLAIM_COMMANDS].includes(command)) {
+  if (![...["status", "ask", "run", "login", "panel"], ...LEDGER_COMMANDS, ...JOB_COMMANDS, ...CLAIM_COMMANDS, ...EVIDENCE_COMMANDS].includes(command)) {
     io.err(`re: unknown command '${command}'`);
     io.err(USAGE);
     return 2;
@@ -124,6 +131,7 @@ export async function runCli(argv: readonly string[], io: CliIo, deps: CliDeps =
   }
 
   if (command === "panel") return runPanelCommand(engine, rest, v, io, deps.env ?? process.env);
+  if ((EVIDENCE_COMMANDS as readonly string[]).includes(command)) return runEvidenceCommand(engine, rest, v, io, deps.env ?? process.env, deps.parsers);
   if ((CLAIM_COMMANDS as readonly string[]).includes(command)) return runClaimCommand(engine, rest, v, io, deps.env ?? process.env);
   if ((JOB_COMMANDS as readonly string[]).includes(command)) return runJobCommand(engine, command, rest, v, io, deps.env ?? process.env, deps.jobs);
   if ((LEDGER_COMMANDS as readonly string[]).includes(command)) {
