@@ -1,4 +1,5 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { git } from "@cairn/launcher";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { provenance as P } from "@cairn/shared";
@@ -173,6 +174,14 @@ describe("checkSupport against the committed ledger (DR-0007 step 1)", () => {
     expect((await check(claim())).ok).toBe(true);
   });
 
+  it("CRLF evidence (Python's csv default) and a quote that kept the carriage return still check out", async () => {
+    const crlf = `evidence/raw/EXP-002/${JOB}/results.csv`;
+    await ledger.writeArtifacts([{ path: crlf, content: CSV.replace(/\n/g, "\r\n") }], P.aiExecuted("m1", "high"), "crlf results");
+    const r = await check(claim({ sources: [`9592 ← ${crlf}:2 «${row2}\r» [result]`], proof: "9592 primes." }));
+    expect(r.sources.map((s) => `${s.value}:${s.status}:${s.detail}`)).toEqual([`9592:ok:${crlf}:2`]);
+    expect(r.errors.filter((e) => e.startsWith("source") || e.startsWith("Proof"))).toEqual([]);
+  });
+
   it("warns about numbers in the Statement and sources no number uses", async () => {
     const r = await check(claim({ statement: "Time grows about 3.3x from 100000 to 400000." }));
     expect(r.warnings).toContain("the Statement carries numbers (3.3, 100000, 400000); ARA keeps run numbers in Conditions and Proof");
@@ -216,6 +225,16 @@ describe("re claim check (CLI)", () => {
       expect(bad.code).toBe(1);
       expect(JSON.parse(bad.out)).toMatchObject({ ok: false, errors: ["Proof: 9593 is not backed by a checked source"] });
       expect((await re("claim", "check")).code).toBe(2);
+      // A draft an analysis agent committed on its branch is checked straight from git.
+      const g = (...args: string[]) => git(ledger.dir, ["-c", "user.name=t", "-c", "user.email=t@t", ...args]);
+      await g("checkout", "-q", "-b", "agent/analysis-1");
+      await mkdir(join(ledger.dir, "staging/claims"), { recursive: true });
+      await writeFile(join(ledger.dir, "staging/claims/sieve.md"), claim());
+      await g("add", "staging/claims/sieve.md");
+      await g("commit", "-q", "-m", "draft");
+      await g("checkout", "-q", "main");
+      expect((await re("claim", "check", "agent/analysis-1:staging/claims/sieve.md", "--project", "demo")).out).toMatch(/support check: PASSED/);
+      expect(await re("claim", "check", "agent/nope:staging/claims/sieve.md", "--project", "demo")).toMatchObject({ code: 1, err: "re claim: no staging/claims/sieve.md on branch agent/nope of demo" });
     } finally {
       await rm(base, { recursive: true, force: true });
     }

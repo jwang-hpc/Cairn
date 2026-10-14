@@ -306,8 +306,10 @@ export class JobService {
   }
 
   /**
-   * jobs.fetch_results: copy declared outputs (and log tails) into evidence/raw/<EXP>/<job>/ with a MANIFEST.json;
-   * larger files stay on the machine, referenced by path (DR-0006 step 5).
+   * jobs.fetch_results: copy declared outputs (and log tails) into evidence/raw/<EXP>/<job>/ with a MANIFEST.json, plus
+   * the exact files the job ran (job/, from the approved snapshot), so results sit next to the code that produced
+   * them and input values are citable from evidence (claim gate, DR-0007). Larger outputs stay on the machine,
+   * referenced by path (DR-0006 step 5).
    */
   async fetch(id: string): Promise<JobRecord> {
     const current = await this.refresh(id);
@@ -327,6 +329,7 @@ export class JobService {
       }
       const at = this.#at();
       const dir = `evidence/raw/${r.experiment}/${id}`;
+      const jobFiles = await this.store.files(r);
       const manifest = {
         job: id,
         project: r.project,
@@ -338,6 +341,7 @@ export class JobService {
         author: r.author,
         files: describeFiles(res.files),
         logs: describeFiles(res.logs),
+        job_files: describeFiles(jobFiles),
         referenced: res.referenced,
         missing: res.missing,
         refused: res.refused,
@@ -345,6 +349,7 @@ export class JobService {
       const evidence = [
         ...res.files.map((f) => ({ path: `${dir}/${f.path}`, content: f.content })),
         ...res.logs.map((f) => ({ path: `${dir}/logs/${f.path}`, content: f.content })),
+        ...jobFiles.map((f) => ({ path: `${dir}/job/${f.path}`, content: f.content })),
         { path: `${dir}/MANIFEST.json`, content: Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`) },
       ];
       const results = { at, dir, files: res.files.map((f) => f.path), referenced: res.referenced, missing: res.missing, refused: res.refused };

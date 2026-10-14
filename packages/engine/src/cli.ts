@@ -236,6 +236,11 @@ async function run(
     io.out(`review   git -C ${worktree.repo} diff ${worktree.base.slice(0, 12)}...${worktree.branch}   (commit ${commit.slice(0, 12)})`);
   }
   if (kept) io.out(`worktree ${worktree.path} (kept)`);
+  if (commit) {
+    for (const f of r.files.filter((x) => x.path.startsWith("staging/claims/") && x.path.endsWith(".md") && x.status !== "deleted")) {
+      io.out(`claim    ${worktree.branch}:${f.path}   check: re claim check ${worktree.branch}:${f.path}`);
+    }
+  }
   for (const j of (await overrides?.jobs?.list().catch(() => [])) ?? []) {
     if (j.author.kind === "agent" && j.author.run === r.run) io.out(`job      ${j.id} ${j.state} (${j.experiment} → ${j.target})  review: re job show ${j.id}`);
   }

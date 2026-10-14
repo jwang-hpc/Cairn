@@ -116,6 +116,9 @@ describe("JobService: submit → approve → run → fetch (DR-0006)", () => {
     expect(fetched.results).toMatchObject({ dir, files: ["results.csv"], missing: [], referenced: [], refused: [] });
     expect(evidenceFiles.get(`${dir}/results.csv`)?.toString()).toBe("n,t\n1,0.5\n");
     expect(evidenceFiles.get(`${dir}/logs/stdout.log`)?.toString()).toBe("done\n");
+    // The exact files that ran (the approved snapshot, not the tampered worktree) sit next to the results.
+    expect(evidenceFiles.get(`${dir}/job/run.sh`)?.toString()).toBe("#!/bin/bash\nset -eu\nprintf 'n,t\\n1,0.5\\n' > results.csv\necho done\n");
+    expect([...evidenceFiles.keys()].filter((k) => k.startsWith(`${dir}/job/`)).sort()).toEqual([`${dir}/job/job.json`, `${dir}/job/run.sh`]);
     expect(JSON.parse(evidenceFiles.get(`${dir}/MANIFEST.json`)!.toString())).toMatchObject({ job: job.id, experiment: "EXP-001", state: "completed", files: [{ path: "results.csv", bytes: 10 }] });
 
     expect(commits.map((c) => [c.prov, c.summary.replace(job.id, "<id>")])).toEqual([
