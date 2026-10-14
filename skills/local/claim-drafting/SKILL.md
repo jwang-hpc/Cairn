@@ -39,17 +39,24 @@ One claim per file: `staging/claims/<short-name>.md`. Don't edit `logic/claims.m
 
 1. **Open before you write.** Read the file, find the line, copy it verbatim between « and », then copy the number
    from that quote. Never type a number from memory.
-2. **One Sources entry per number** in Statement, Conditions, and Proof. A number may appear rounded
-   (`0.0052` for `0.00518620199727593`), but a rounding that changes the digits it keeps is a different number.
-3. **Results only from `evidence/`** (`evidence/raw/<EXP>/<job>/` from the executor, `evidence/tables/` from parsers)
-   or executor records (`engine/jobs/`). Tag them `[result]`. Values you set (N, cores, walltime) are `[input]`; cite
-   them from `evidence/raw/<EXP>/<job>/job/` (the exact files the job ran).
-4. **Derived numbers come from code.** A ratio, mean, or speedup must be in a file: use the parser tables
+2. **One Sources entry per number** in the title, Statement, Conditions, and Proof. A number may appear rounded
+   (`0.0052` for `0.00518620199727593`), but a rounding that changes the digits it keeps is a different number. A
+   Sources value is one number with an optional unit (`0.0052`, `33,860`, `3.3x`, `12 ms`), nothing else.
+3. **Results only from what the job produced:** the outputs the executor fetched (`evidence/raw/<EXP>/<job>/`, as
+   listed in its MANIFEST.json, including `logs/`) and parser tables (`evidence/tables/`). Tag them `[result]`.
+   Not `job/` (the files that were submitted), not MANIFEST.json, not `engine/jobs/`.
+4. **Inputs** are values that were set (N, cores, walltime): tag them `[input]` and cite where they were set, e.g.
+   `evidence/raw/<EXP>/<job>/job/` (the exact files the job ran) or `engine/jobs/<id>.json`. The report shows the
+   tag of every number; a measured value backed only by an [input] is flagged.
+5. **Derived numbers come from code.** A ratio, mean, or speedup must be in a file: use the parser tables
    (`evidence/tables/<EXP>/<job>/*.summary.csv`, `*.ratios.csv`) and cite that line. Don't compute it yourself.
-5. **Identifiers go in `code spans`**: job ids, Slurm ids, versions, paths. Numbers in code spans aren't quantities.
-6. **Paths and line numbers** are relative to the project root and 1-based. The check reads the committed ledger,
+6. **Identifiers go in `code spans`** as one token: job ids, paths, versions like `24.11.5`. A plain number in a code
+   span is still a number and needs a source. Write numbers plainly: no HTML comments, invisible characters, or
+   non-ASCII digits (the draft is refused).
+7. **Paths and line numbers** are relative to the project root and 1-based. The check reads the committed ledger,
    so cite files that already exist there.
-7. Can't find a source? Write `<value> ← [pending: what's missing]`. The claim won't pass, but it stays honest.
+8. Can't find a source? Write `<value> ← [pending: what's missing]`. The claim won't pass, but it stays honest.
+9. Your draft's Provenance field is ignored: an approved claim records who approved it.
 
 ## Scope
 

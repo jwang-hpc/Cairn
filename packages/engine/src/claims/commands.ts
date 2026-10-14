@@ -14,16 +14,17 @@ import { renderReview } from "./review.js";
 import { checkSupport, renderReport } from "./support.js";
 
 export const CLAIM_COMMANDS = ["claim"] as const;
-export const CLAIM_OPTIONS = { json: { type: "boolean" } } as const;
+export const CLAIM_OPTIONS = { json: { type: "boolean" }, own: { type: "boolean" } } as const;
 export const CLAIM_USAGE = `claim commands (nothing reaches logic/claims.md without the gate):
   (<draft> is a file, or <branch>:staging/claims/<name>.md, e.g. a draft an analysis agent committed)
   claim check <draft.md> [--json]    1. support check, code only: every source opened in the committed ledger,
                                         every number in the claim backed by one; exit 0 only if it passes
   claim review <draft.md> [--model A] [--effort E]
                                      2. rigor review by a model (default routing.analysis.reviewer); advice only
-  claim approve <draft.md> [--note N]
+  claim approve <draft.md> [--note N] [--own]
                                      3. your approval: re-checks support, needs a review of this exact draft,
-                                        writes the claim to logic/claims.md as C<nn>
+                                        writes the claim to logic/claims.md as C<nn> (user-revised; --own if
+                                        you wrote the draft yourself: user)
   claim list                         claims in logic/claims.md`;
 
 type Values = Record<string, string | boolean | undefined>;
@@ -98,7 +99,7 @@ export async function runClaimCommand(engine: Engine, args: string[], v: Values,
       io.out(`approve with: re claim approve ${file}${r.review.verdict === "ready" ? "" : "   (the reviewer suggests revising first; your call)"}`);
       return 0;
     }
-    const a = await ledger.approveClaim(md, { ...(typeof v.note === "string" ? { note: v.note } : {}) });
+    const a = await ledger.approveClaim(md, { ...(typeof v.note === "string" ? { note: v.note } : {}), own: v.own === true && !BRANCH_DRAFT.test(file) });
     io.out(`approved: ${a.id} in logic/claims.md (${a.provenance}); support re-checked at ${a.report.revision.slice(0, 12)}, review ${a.review.verdict} by ${a.review.reviewer.alias}`);
     io.out(`gate record: engine/claims/${a.id}/`);
     return 0;

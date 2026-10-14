@@ -46,6 +46,7 @@ def main(argv):
         print(json.dumps({"parser": PARSER, "version": VERSION, "outputs": [], "notes": ["empty file"]}))
         return 0
     header, data = rows[0], rows[1 : MAX_ROWS + 1]
+    truncated = len(rows) - 1 > MAX_ROWS
     data = [r for r in data if any(cell.strip() for cell in r)]
     cols = []
     for i, name in enumerate(header):
@@ -53,6 +54,8 @@ def main(argv):
         if data and all(v is not None for v in vals):
             cols.append((name, vals))
     notes = [] if cols else ["no numeric columns"]
+    if truncated:
+        notes.append(f"only the first {MAX_ROWS} rows were summarized")
 
     outputs = []
     summary = os.path.join(out, f"{stem}.summary.csv")

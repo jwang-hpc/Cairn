@@ -58,3 +58,12 @@ changes only through gated, user-approved edits.
   support check at the current commit, requires a review of this exact draft, refuses a hand-edited claims.md,
   assigns `C<nn>`, enters AI drafts as `user-revised`, and commits the claim with `engine/claims/<id>/{draft.md,
   gate.json}` (report, review, approval) in one commit.
+- **Hardening after review (M6.5):** `[result]` sources only from a job's fetched outputs (listed in its
+  `MANIFEST.json`, logs included) or parser tables; never `job/`, `MANIFEST.json`, or `engine/jobs/` (agent-written
+  text). The coverage report shows each number's tag. The title is covered; a source value is one number with an
+  optional unit; drafts with HTML comments, invisible characters, or non-ASCII digits are refused; only
+  identifier-shaped code spans are masked; prose is compared with the file's number (no double rounding); CSV lines
+  split on commas; trace-node sources need whole numbers inside the quote and can't be results. Provenance comes from
+  how the draft arrived (`user-revised`, or `user` with `--own`), never from its text. Ledger commits are locked per
+  project and hold only their own paths; a failed approval leaves no trace. Parser outputs are read without following
+  links, inputs as raw bytes.

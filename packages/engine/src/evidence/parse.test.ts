@@ -54,6 +54,13 @@ describe("parsers", () => {
     await expect(new HostParserRunner({ python: "/usr/bin/python3", dir }).run("liar", { name: "a.csv", content: Buffer.from("x") })).rejects.toThrow(/manifest doesn't match/);
   });
 
+  it("#8 refuses a symlink among the parser's outputs (it would hand the host one of its own files)", async () => {
+    const dir = join(base, "parsers");
+    await mkdir(dir);
+    await writeFile(join(dir, "linker.py"), "import json,sys,os\nos.symlink('/etc/hosts', os.path.join(sys.argv[2],'x.csv'))\nprint(json.dumps({'parser':'linker','version':1,'outputs':[{'path':'x.csv','rows':0,'description':''}],'notes':[]}))\n");
+    await expect(new HostParserRunner({ python: "/usr/bin/python3", dir }).run("linker", { name: "a.csv", content: Buffer.from("x") })).rejects.toThrow(/not a regular file/);
+  });
+
   it("SandboxParserRunner: only the input and the parser are mounted; python runs isolated in the sandbox", async () => {
     let request: SandboxOptions["request"] | undefined;
     let command: readonly string[] | undefined;

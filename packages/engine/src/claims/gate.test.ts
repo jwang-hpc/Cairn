@@ -80,7 +80,11 @@ async function setup(dataClass: DataClass = "unpublished") {
   models.api_key.setProvider(f.provider);
   engine = new Engine(cfg, { configDir: "(test)", home: join(base, "home") }, { models, stores });
   ledger = await Ledger.create({ projectsDir: base, name: "demo", title: "Sieve study", dataClass });
-  await ledger.writeArtifacts([{ path: R, content: CSV }], P.aiExecuted("claude-sonnet-5-5", "high"), "results");
+  await ledger.writeArtifacts(
+    [{ path: R, content: CSV }, { path: R.replace("results.csv", "MANIFEST.json"), content: JSON.stringify({ files: [{ path: "results.csv" }], logs: [] }) }],
+    P.aiExecuted("claude-sonnet-5-5", "high"),
+    "results",
+  );
 }
 
 beforeEach(async () => {
@@ -137,6 +141,35 @@ describe("the claim gate (DR-0007): check → review → approve", () => {
     await writeFile(join(ledger.dir, "logic/claims.md"), "# Claims\n## C01: sneaked in\n");
     await expect(ledger.approveClaim(md)).rejects.toThrow(/has changes made outside the gate/);
     await expect(ledger.writeArtifacts([{ path: "logic/claims.md", content: "x" }], P.user, "x")).rejects.toThrow(/artifacts may only be written under/);
+  });
+
+  it("#4 provenance comes from how the draft arrived, never from its text", async () => {
+    await setup();
+    const md = draft().replace("- **Provenance**: ai-suggested", "- **Provenance**: user");
+    await reviewDraft(engine, ledger, md);
+    const a = await ledger.approveClaim(md);
+    expect(a.provenance).toBe("user-revised");
+    expect(await readFile(join(ledger.dir, "logic/claims.md"), "utf8")).toContain("- **Provenance**: user-revised");
+    const own = draft("Job `20261014-1251-c30f`: 9592 primes below 100000.");
+    await reviewDraft(engine, ledger, own);
+    expect((await ledger.approveClaim(own, { own: true })).provenance).toBe("user");
+  });
+
+  it("#9 a failed commit leaves no half-written claim; commits hold only their own paths", async () => {
+    await setup();
+    const md = draft();
+    await reviewDraft(engine, ledger, md);
+    await writeFile(join(ledger.dir, ".git", "index.lock"), ""); // another git process holds the index
+    await expect(ledger.approveClaim(md)).rejects.toThrow();
+    await rm(join(ledger.dir, ".git", "index.lock"));
+    expect(await readFile(join(ledger.dir, "logic/claims.md"), "utf8")).not.toContain("C01");
+    expect((await git(ledger.dir, ["status", "--porcelain"])).trim()).toBe("");
+    // Something else staged in the index stays out of the gate's commit.
+    await writeFile(join(ledger.dir, "notes.txt"), "unrelated\n");
+    await git(ledger.dir, ["add", "notes.txt"]);
+    await ledger.approveClaim(md);
+    expect((await git(ledger.dir, ["show", "--name-only", "--format=", "HEAD"])).trim().split("\n").sort()).toEqual(["engine/claims/C01/draft.md", "engine/claims/C01/gate.json", "engine/ledger.jsonl", "logic/claims.md"]);
+    expect((await git(ledger.dir, ["status", "--porcelain"])).trim()).toBe("A  notes.txt");
   });
 
   it("the reviewer is a model call under the project's data class: a restricted project refuses a provider not allowed", async () => {

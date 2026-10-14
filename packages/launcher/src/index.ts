@@ -31,6 +31,7 @@ export {
   commitWorktree,
   createWorktree,
   git,
+  gitBlob,
   outsideAllowed,
   removeWorktree,
   type WorktreeChanges,

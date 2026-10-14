@@ -40,7 +40,8 @@ export interface SupportReport {
   revision: string;
   checkedAt: string;
   sources: { entry: string; value: string; status: SourceCheck; detail: string }[];
-  coverage: { field: string; number: string; status: CoverageCheck; source?: string }[];
+  /** Each number in the claim, the source value that backs it, and that source's tag. */
+  coverage: { field: string; number: string; status: CoverageCheck; source?: string; tag?: "input" | "result" }[];
   errors: string[];
   warnings: string[];
   /** What the check did and did not establish (support is not correctness). */
