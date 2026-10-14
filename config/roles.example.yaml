@@ -8,7 +8,7 @@ roles:
     network: [pypi.org, files.pythonhosted.org, registry.npmjs.org]
     executor_tools: [jobs.submit, jobs.status]
   analysis:
-    mounts: { read: [evidence/, logic/], write: [analysis/] }
+    mounts: { read: [evidence/, logic/], write: [analysis/, staging/claims/] }   # drafts for the claim gate
     network: []
     executor_tools: [jobs.fetch_results]
   panel:

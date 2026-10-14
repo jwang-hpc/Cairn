@@ -40,7 +40,8 @@ export function parseDraft(md: string): ClaimDraft {
   let field: string | undefined;
   const items: Record<string, string[]> = {};
   let seenHeading = false;
-  for (const line of md.split(/\r?\n/)) {
+  // A carriage return inside a line (a quote copied from a CRLF file) is never content: drop it, as the check does.
+  for (const line of md.replace(/\r(?!\n)/g, "").split(/\r?\n/)) {
     const h = HEADING.exec(line);
     if (h) {
       if (seenHeading) {

@@ -1,10 +1,11 @@
 // `re claim check | review | approve | list`: the claim gate (DR-0007) from the CLI. check is code only; review asks
 // a reviewer model for advice; approve is the user's decision and the only way into logic/claims.md.
 import { readFile } from "node:fs/promises";
+import { git } from "@cairn/launcher";
 import { resolve } from "node:path";
 import type { Engine } from "../engine.js";
 import { openCurrentProject } from "../ledger/commands.js";
-import { LedgerError } from "../ledger/ledger.js";
+import { type Ledger, LedgerError } from "../ledger/ledger.js";
 import { parseDraft } from "./draft.js";
 import { ledgerReader } from "./reader.js";
 import type { EffortLevel } from "@cairn/shared";
@@ -15,6 +16,7 @@ import { checkSupport, renderReport } from "./support.js";
 export const CLAIM_COMMANDS = ["claim"] as const;
 export const CLAIM_OPTIONS = { json: { type: "boolean" } } as const;
 export const CLAIM_USAGE = `claim commands (nothing reaches logic/claims.md without the gate):
+  (<draft> is a file, or <branch>:staging/claims/<name>.md, e.g. a draft an analysis agent committed)
   claim check <draft.md> [--json]    1. support check, code only: every source opened in the committed ledger,
                                         every number in the claim backed by one; exit 0 only if it passes
   claim review <draft.md> [--model A] [--effort E]
@@ -25,6 +27,23 @@ export const CLAIM_USAGE = `claim commands (nothing reaches logic/claims.md with
   claim list                         claims in logic/claims.md`;
 
 type Values = Record<string, string | boolean | undefined>;
+
+const BRANCH_DRAFT = /^([A-Za-z0-9][A-Za-z0-9._/-]*):(staging\/claims\/[A-Za-z0-9._-]+\.md)$/;
+
+/** A draft file on disk, or one committed on a branch of the project (agent/<id>:staging/claims/x.md). */
+async function readDraft(ledger: Ledger, ref: string): Promise<string> {
+  try {
+    return await readFile(resolve(ref), "utf8");
+  } catch (e) {
+    const m = BRANCH_DRAFT.exec(ref);
+    if (!m) throw new LedgerError(`cannot read ${ref}: ${(e as Error).message}`);
+    try {
+      return await git(ledger.dir, ["show", `${m[1]}:${m[2]}`]);
+    } catch {
+      throw new LedgerError(`no ${m[2]} on branch ${m[1]} of ${ledger.name}`);
+    }
+  }
+}
 interface Io {
   out(line: string): void;
   err(line: string): void;
@@ -55,15 +74,9 @@ export async function runClaimCommand(engine: Engine, args: string[], v: Values,
     io.err(`usage: re claim ${sub} <draft.md>`);
     return 2;
   }
-  let md: string;
-  try {
-    md = await readFile(resolve(file), "utf8");
-  } catch (e) {
-    io.err(`re claim: cannot read ${file}: ${(e as Error).message}`);
-    return 2;
-  }
   try {
     const ledger = await openCurrentProject(engine, v, env);
+    const md = await readDraft(ledger, file);
     if (sub === "check") {
       const report = await checkSupport(parseDraft(md), ledgerReader(ledger));
       io.out(v.json ? JSON.stringify(report, null, 2) : `project ${ledger.name}\n${renderReport(report)}`);

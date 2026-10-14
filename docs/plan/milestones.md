@@ -66,6 +66,11 @@ Slurm job 27314225 completed (sacct), results fetched, ledger clean. Escape suit
 Python parser framework; support check (code-first, provcheck-style); rigor review; user approval into
 claims.md.
 Acceptance: a claim with a wrong number is flagged by code alone; a correct one passes with a coverage report.
+**Status (2026-10-14): implemented (M6.1–M6.4); acceptance part 1 passed.** `scripts/acceptance-m6.sh` on the real
+M5 workstation results: the correct claim passed (4 sources, 6 numbers covered) and the same claim with 9593 instead
+of 9592 was flagged by code alone ("Proof: 9593 is not backed by a checked source"), no model called. Part 2
+(`--full`: parsers in the agent image, an analysis agent drafting, rigor review, approval into claims.md) needs
+your terminal.
 
 ## M7 — Literature
 Literature proxy MCP (Semantic Scholar, OpenAlex, arXiv, DBLP, Crossref); structured paper notes; citation
