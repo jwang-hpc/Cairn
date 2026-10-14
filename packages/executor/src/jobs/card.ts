@@ -17,7 +17,11 @@ export function printable(text: string, multiline = false): string {
 }
 const fmtBytes = (n: number) => (n < 1024 ? `${n} B` : n < 1 << 20 ? `${(n / 1024).toFixed(1)} KiB` : `${(n / (1 << 20)).toFixed(1)} MiB`);
 
-export function renderCard(job: JobRecord, files: JobFileContent[], opts: { autoApproval?: string; approvedTwin?: string; snapshotDir?: string } = {}): string {
+export function renderCard(
+  job: JobRecord,
+  files: JobFileContent[],
+  opts: { autoApproval?: string; approvedTwin?: string; snapshotDir?: string; scheduler?: string } = {},
+): string {
   const { lint, manifest } = job;
   const a = job.author;
   const lines = [
@@ -25,9 +29,9 @@ export function renderCard(job: JobRecord, files: JobFileContent[], opts: { auto
     `state:       ${job.state}${job.error ? `  (last error: ${job.error})` : ""}`,
     `author:      ${a.kind === "agent" ? `agent ${a.agent} (${a.role}; ${a.model}, ${a.effort}), run ${a.run}` : "you"}${job.branch ? `, branch ${job.branch}` : ""}`,
     ...(manifest.description ? [`what:        ${manifest.description}`] : []),
-    `resources:   ${lint.nodes} node${lint.nodes === 1 ? "" : "s"} × ${lint.cores} cores${lint.gpus ? `, ${lint.gpus} GPU${lint.gpus === 1 ? "" : "s"}/node` : ""}${manifest.resources.memory_gb ? `, ${manifest.resources.memory_gb} GB/node` : ""}, walltime ${manifest.resources.walltime} (${lint.node_hours} node-hours)`,
+    `resources:   ${lint.nodes} node${lint.nodes === 1 ? "" : "s"} × ${lint.cores} core${lint.cores === 1 ? "" : "s"}${lint.gpus ? `, ${lint.gpus} GPU${lint.gpus === 1 ? "" : "s"}/node` : ""}${manifest.resources.memory_gb ? `, ${manifest.resources.memory_gb} GB/node` : ""}, walltime ${manifest.resources.walltime} (${lint.node_hours} node-hours)`,
     ...(lint.account || lint.partition ? [`scheduler:   ${[lint.account ? `account ${lint.account}` : "", lint.partition ? `partition ${lint.partition}` : ""].filter(Boolean).join(", ")}`] : []),
-    `pre-flight:  ${job.preflight ? `${job.preflight.ok ? "ok" : "REFUSED"}: ${job.preflight.detail}` : "not run (no scheduler, or no SSH session at submit time)"}`,
+    `pre-flight:  ${job.preflight ? `${job.preflight.ok ? "ok" : "REFUSED"}: ${job.preflight.detail}` : opts.scheduler === "none" ? "none (no scheduler on this machine)" : "not run (no SSH session at submit time)"}`,
     `outputs:     ${manifest.outputs.join(", ") || "(none declared)"}`,
     `fingerprint: ${job.fingerprint.slice(0, 16)}${opts.approvedTwin ? ` (identical to approved job ${opts.approvedTwin})` : " (new files)"}`,
     ...(opts.autoApproval ? [`auto:        ${opts.autoApproval}`] : []),

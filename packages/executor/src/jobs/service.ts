@@ -377,6 +377,7 @@ export class JobService {
       ...(twin ? { approvedTwin: twin.id } : {}),
       ...(auto ? { autoApproval: `${auto.ok ? "yes" : "no"} — ${auto.reason}` } : {}),
       snapshotDir: join(this.store.root, id, "files"),
+      ...(machine ? { scheduler: machine.scheduler } : {}),
     });
   }
 }

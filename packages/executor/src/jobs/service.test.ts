@@ -99,6 +99,7 @@ describe("JobService: submit → approve → run → fetch (DR-0006)", () => {
     const card = await svc.card(job.id);
     expect(card).toContain("author:      agent coder-abc123 (coder; claude-sonnet-5-5, medium), run run-1, branch agent/coder-abc123");
     expect(card).toContain("resources:   1 node × 2 cores, walltime 00:01:00 (0.017 node-hours)");
+    expect(card).toContain("pre-flight:  none (no scheduler on this machine)");
     expect(card).toContain("── run.sh (entry point) ──\n#!/bin/bash\nset -eu");
     expect(card).toContain(`approve: re job approve ${job.id}`);
 
