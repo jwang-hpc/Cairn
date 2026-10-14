@@ -2,8 +2,11 @@ import { parseArgs } from "node:util";
 import { EFFORT_LEVELS, type EffortLevel, FORMAT_VERSION } from "@cairn/shared";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import type { JobServiceOptions } from "@cairn/executor";
 import { ConfigError } from "./config/load.js";
-import { LEDGER_COMMANDS, LEDGER_OPTIONS, LEDGER_USAGE, runLedgerCommand } from "./ledger/commands.js";
+import { JOB_COMMANDS, JOB_OPTIONS, JOB_USAGE, runJobCommand } from "./jobs/commands.js";
+import { openJobService } from "./jobs/jobs.js";
+import { LEDGER_COMMANDS, LEDGER_OPTIONS, LEDGER_USAGE, openCurrentProject, runLedgerCommand } from "./ledger/commands.js";
 import { PANEL_OPTIONS, PANEL_USAGE, runPanelCommand } from "./panel/commands.js";
 import { Engine, type LoginIo, type Status } from "./engine.js";
 import { type EnginePaths, REPO_ROOT, resolvePaths } from "./paths.js";
@@ -25,6 +28,8 @@ export interface CliDeps {
   openEngine?: (paths: EnginePaths) => Promise<Engine>;
   /** Overrides for `re run` (tests inject a fake sandbox launcher). */
   worker?: Partial<Omit<WorkerDeps, "engine">>;
+  /** Overrides for the jobs service (tests inject a local transport). */
+  jobs?: Partial<JobServiceOptions>;
 }
 
 const USAGE = `usage: re <command> [options]
@@ -34,15 +39,18 @@ commands:
                                         (--check: one-word test call per route)
   ask [--model A] [--effort E] [--role R] <prompt...>
                                         one-shot agent call; recorded in usage.jsonl
-  run --repo P --role R --task FILE [--model A] [--effort E] [--keep]
-                                        agent in its own worktree + sandbox; changes are
-                                        committed to branch agent/<id> for review
+  run [--repo P] --role R --task FILE [--model A] [--effort E] [--keep]
+                                        agent in its own worktree + sandbox (default repo:
+                                        the current project); changes are committed to
+                                        branch agent/<id> for review
   login <pi-provider> <oauth|api_key>   sign in or store an API key (run in your own terminal)
   help                                  show this message
 
 ${LEDGER_USAGE}
 
 ${PANEL_USAGE}
+
+${JOB_USAGE}
 
 options:
   --version   print engine version
@@ -72,6 +80,7 @@ export async function runCli(argv: readonly string[], io: CliIo, deps: CliDeps =
         keep: { type: "boolean" },
         ...LEDGER_OPTIONS,
         ...PANEL_OPTIONS,
+        ...JOB_OPTIONS,
       },
       allowPositionals: true,
       strict: true,
@@ -92,7 +101,7 @@ export async function runCli(argv: readonly string[], io: CliIo, deps: CliDeps =
     io.out(USAGE);
     return 0;
   }
-  if (![...["status", "ask", "run", "login", "panel"], ...LEDGER_COMMANDS].includes(command)) {
+  if (![...["status", "ask", "run", "login", "panel"], ...LEDGER_COMMANDS, ...JOB_COMMANDS].includes(command)) {
     io.err(`re: unknown command '${command}'`);
     io.err(USAGE);
     return 2;
@@ -111,6 +120,7 @@ export async function runCli(argv: readonly string[], io: CliIo, deps: CliDeps =
   }
 
   if (command === "panel") return runPanelCommand(engine, rest, v, io, deps.env ?? process.env);
+  if ((JOB_COMMANDS as readonly string[]).includes(command)) return runJobCommand(engine, command, rest, v, io, deps.env ?? process.env, deps.jobs);
   if ((LEDGER_COMMANDS as readonly string[]).includes(command)) {
     return runLedgerCommand(engine, command, rest, v, io, deps.env ?? process.env);
   }
@@ -131,9 +141,18 @@ export async function runCli(argv: readonly string[], io: CliIo, deps: CliDeps =
       return ask(engine, io, prompt, { model: v.model, effort: v.effort as EffortLevel | undefined, role: v.role });
     }
     case "run": {
-      if (!v.repo || !v.role || !v.task) {
-        io.err("usage: re run --repo <git repo> --role <role> --task <file> [--model A] [--effort E] [--keep]");
+      if (!v.role || !v.task) {
+        io.err("usage: re run [--repo <git repo>] --role <role> --task <file> [--model A] [--effort E] [--keep]");
         return 2;
+      }
+      let repo = v.repo ? resolve(v.repo) : undefined;
+      if (!repo) {
+        try {
+          repo = (await openCurrentProject(engine, v, deps.env ?? process.env)).dir;
+        } catch (e) {
+          io.err(`re run: no --repo and ${(e as Error).message}`);
+          return 2;
+        }
       }
       if (v.effort !== undefined && !(EFFORT_LEVELS as readonly string[]).includes(v.effort)) {
         io.err(`re run: --effort must be one of ${EFFORT_LEVELS.join(", ")}`);
@@ -146,8 +165,8 @@ export async function runCli(argv: readonly string[], io: CliIo, deps: CliDeps =
         io.err(`re run: cannot read task file: ${(e as Error).message}`);
         return 2;
       }
-      return run(engine, io, deps.worker, {
-        repo: resolve(v.repo), role: v.role, task, keep: v.keep === true,
+      return run(engine, io, { jobs: openJobService(engine, deps.jobs), ...deps.worker }, {
+        repo, role: v.role, task, keep: v.keep === true,
         ...(v.model ? { alias: v.model } : {}), ...(v.effort ? { effort: v.effort as EffortLevel } : {}),
       });
     }
@@ -204,6 +223,9 @@ async function run(
     io.out(`review   git -C ${worktree.repo} diff ${worktree.base.slice(0, 12)}...${worktree.branch}   (commit ${commit.slice(0, 12)})`);
   }
   if (kept) io.out(`worktree ${worktree.path} (kept)`);
+  for (const j of (await overrides?.jobs?.list().catch(() => [])) ?? []) {
+    if (j.author.kind === "agent" && j.author.run === r.run) io.out(`job      ${j.id} ${j.state} (${j.experiment} → ${j.target})  review: re job show ${j.id}`);
+  }
   return r.status === "done" ? 0 : r.status === "needs_input" ? 3 : 1;
 }
 

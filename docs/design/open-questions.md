@@ -55,3 +55,14 @@
     untrusted literature).
     **Applied (2026-10-14):** AirPlay Receiver turned off by the user; `lsof` shows nothing on 5000/7000. The
     general case (any service on 0.0.0.0) still needs (b).
+13. (New, M5) Workstation jobs and session lifetime. The workstation runner starts each job detached
+    (`nohup`, own process group via perl `setpgrp`), so it should outlive the SSH channel that started it. If
+    the workstation's systemd-logind has `KillUserProcesses=yes`, closing the ControlMaster (or `ControlPersist`
+    expiring) may still kill it. Check once on the workstation: `loginctl show-user "$USER" -p Linger` and
+    `grep KillUserProcesses /etc/systemd/logind.conf`. If jobs die with the session, options: enable lingering
+    and launch with `systemd-run --user --scope`, or keep the master open for the job's walltime. Long runs
+    belong to M9 campaigns either way.
+14. (New, M5) Fetched evidence and running agents. `jobs.fetch_results` commits outputs to the project ledger
+    (`evidence/raw/<EXP>/<job>/`); an agent already running in a worktree does not see them until its next
+    run. M6 (analysis) should decide whether the analysis role starts after the fetch or gets the files copied
+    into its worktree.

@@ -95,6 +95,12 @@ describe("lintJob: resources and files (DR-0006)", () => {
     expect(lintJob({ target: "hpc", machine: open, files: job("true\n") }).lint.warnings).toEqual(["hpc has no partition allowlist in machines.yaml"]);
   });
 
+  it("refuses a machine whose host is still a placeholder, not an ssh alias", () => {
+    expect(lintJob({ target: "w", machine: { ...workstation, host: "<hostname>" }, files: job("true\n") }).lint.errors).toContain(
+      'w: machines.yaml host "<hostname>" is not an ssh alias (still a placeholder?)',
+    );
+  });
+
   it("walltimeSeconds", () => {
     expect(walltimeSeconds("100:00:01")).toBe(360001);
   });
