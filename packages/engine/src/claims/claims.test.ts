@@ -16,6 +16,8 @@ const CSV = "n,primes,seconds\n100000,9592,0.00518620199727593\n200000,17984,0.0
 const R = `evidence/raw/EXP-001/${JOB}/results.csv`;
 const row2 = "100000,9592,0.00518620199727593";
 const row4 = "400000,33860,0.017140839001513086";
+/** The executor's record of what it fetched: only declared outputs can back a [result]. */
+const MANIFEST = JSON.stringify({ files: [{ path: "results.csv" }], logs: [{ path: "stdout.log" }] });
 
 const claim = (o: { proof?: string; sources?: string[]; statement?: string } = {}) =>
   [
@@ -42,9 +44,9 @@ const claim = (o: { proof?: string; sources?: string[]; statement?: string } = {
 
 describe("numbers", () => {
   it("reads quantities from prose, not identifiers", () => {
-    expect(proseNumbers(`EXP-001 job \`${JOB}\` on 2026-10-14: 9592 primes, 33,860 below 400000 in 0.0171 s (HY01, N05, see evidence/raw/x.csv); -3.5 and 1e-3`)).toEqual([
-      "33,860",
+    expect(proseNumbers(`EXP-001 job \`${JOB}\` on 2026-10-14: 9592 primes, 33,860 below 400000 in 0.0171 s (HY01, N05, see \`evidence/raw/x.csv\`); -3.5 and 1e-3`)).toEqual([
       "9592",
+      "33,860",
       "400000",
       "0.0171",
       "-3.5",
@@ -67,13 +69,13 @@ describe("numbers", () => {
 
 describe("parseDraft", () => {
   it("reads the ARA claim block and its sources", () => {
-    const d = parseDraft(claim({ sources: [`9592 ← ${R}:2 «${row2}» [result]`, "512 ← [pending: the 512-node run]", `x ← N05:result «9592 primes» [result]`] }));
+    const d = parseDraft(claim({ sources: [`9592 ← ${R}:2 «${row2}» [result]`, "512 ← [pending: the 512-node run]", `64 ← N05:result «64 nodes» [input]`] }));
     expect(d.title).toBe("Pure-Python sieve time grows about linearly with N");
     expect(d.problems).toEqual([]);
     expect(d.sources).toEqual([
       { raw: `9592 ← ${R}:2 «${row2}» [result]`, value: "9592", ref: { kind: "file", path: R, line: 2 }, quote: row2, tag: "result" },
       { raw: "512 ← [pending: the 512-node run]", value: "512", pending: "the 512-node run" },
-      { raw: "x ← N05:result «9592 primes» [result]", value: "x", ref: { kind: "node", node: "N05", field: "result" }, quote: "9592 primes", tag: "result" },
+      { raw: "64 ← N05:result «64 nodes» [input]", value: "64", ref: { kind: "node", node: "N05", field: "result" }, quote: "64 nodes", tag: "input" },
     ]);
   });
 
@@ -98,7 +100,7 @@ describe("checkSupport against the committed ledger (DR-0007 step 1)", () => {
   beforeEach(async () => {
     base = await mkdtemp(join(tmpdir(), "cairn-claims-"));
     ledger = await Ledger.create({ projectsDir: base, name: "demo", title: "Demo", dataClass: "unpublished" });
-    await ledger.writeArtifacts([{ path: R, content: CSV }], P.aiExecuted("claude-sonnet-5-5", "high"), "results");
+    await ledger.writeArtifacts([{ path: R, content: CSV }, { path: R.replace("results.csv", "MANIFEST.json"), content: MANIFEST }], P.aiExecuted("claude-sonnet-5-5", "high"), "results");
   });
   afterEach(async () => {
     await rm(base, { recursive: true, force: true });
@@ -110,15 +112,15 @@ describe("checkSupport against the committed ledger (DR-0007 step 1)", () => {
     expect(r.errors).toEqual([]);
     expect(r.ok).toBe(true);
     expect(r.sources.map((s) => `${s.value}:${s.status}`)).toEqual(["100000:ok", "400000:ok", "9592:ok", "0.0052:rounded", "33,860:ok", "0.0171:rounded"]);
-    expect(r.coverage.map((c) => `${c.field}:${c.number}:${c.status}`)).toEqual([
-      "Conditions:100000:exact",
-      "Conditions:400000:exact",
-      "Proof:33,860:exact",
-      "Proof:9592:exact",
-      "Proof:100000:exact",
-      "Proof:0.0052:exact",
-      "Proof:400000:exact",
-      "Proof:0.0171:exact",
+    expect(r.coverage.map((c) => `${c.field}:${c.number}:${c.status}:${c.tag}`)).toEqual([
+      "Conditions:100000:exact:input",
+      "Conditions:400000:exact:input",
+      "Proof:9592:exact:result",
+      "Proof:100000:exact:input",
+      "Proof:0.0052:rounded:result",
+      "Proof:33,860:exact:result",
+      "Proof:400000:exact:input",
+      "Proof:0.0171:rounded:result",
     ]);
     const text = renderReport(r);
     expect(text).toContain("support check: PASSED");
@@ -156,18 +158,18 @@ describe("checkSupport against the committed ledger (DR-0007 step 1)", () => {
     await writeFile(join(ledger.dir, "analysis.csv"), CSV);
     const r = await check(
       claim({
-        sources: [`9592 ← experiments/EXP-001/out.csv:2 «${row2}» [result]`, `9592 ← evidence/raw/EXP-001/new/results.csv:2 «${row2}» [result]`, "33,860 ← [pending: rerun]"],
+        sources: [`9592 ← experiments/EXP-001/out.csv:2 «${row2}» [result]`, `9592 ← evidence/raw/EXP-001/20261014-0000-beef/results.csv:2 «${row2}» [result]`, "33,860 ← [pending: rerun]"],
         proof: "9592 primes; 33,860 below.",
       }),
     );
     expect(r.errors).toEqual([
-      "source 9592: experiments/EXP-001/out.csv: results must come from evidence/ or executor records (engine/jobs/)",
-      "source 9592: evidence/raw/EXP-001/new/results.csv is not in the ledger (not committed)",
+      "source 9592: experiments/EXP-001/out.csv: results come only from a job's outputs (evidence/raw/<EXP>/<job>/) or parser tables (evidence/tables/)",
+      "source 9592: evidence/raw/EXP-001/20261014-0000-beef/results.csv: no executor MANIFEST.json for job 20261014-0000-beef",
       "source 33,860 is pending (rerun); a claim with pending sources can't pass",
       "Conditions: 100000 is not backed by a checked source",
       "Conditions: 400000 is not backed by a checked source",
-      "Proof: 33,860 is not backed by a checked source (its source is pending)",
       "Proof: 9592 is not backed by a checked source (its source failed)",
+      "Proof: 33,860 is not backed by a checked source (its source is pending)",
     ]);
     // A file sitting uncommitted in the working copy is invisible to the check.
     await writeFile(join(ledger.dir, R), CSV.replace("9592", "9593"));
@@ -176,10 +178,80 @@ describe("checkSupport against the committed ledger (DR-0007 step 1)", () => {
 
   it("CRLF evidence (Python's csv default) and a quote that kept the carriage return still check out", async () => {
     const crlf = `evidence/raw/EXP-002/${JOB}/results.csv`;
-    await ledger.writeArtifacts([{ path: crlf, content: CSV.replace(/\n/g, "\r\n") }], P.aiExecuted("m1", "high"), "crlf results");
+    await ledger.writeArtifacts([{ path: crlf, content: CSV.replace(/\n/g, "\r\n") }, { path: crlf.replace("results.csv", "MANIFEST.json"), content: MANIFEST }], P.aiExecuted("m1", "high"), "crlf results");
     const r = await check(claim({ sources: [`9592 ← ${crlf}:2 «${row2}\r» [result]`], proof: "9592 primes." }));
     expect(r.sources.map((s) => `${s.value}:${s.status}:${s.detail}`)).toEqual([`9592:ok:${crlf}:2`]);
     expect(r.errors.filter((e) => e.startsWith("source") || e.startsWith("Proof"))).toEqual([]);
+  });
+
+  describe("review findings (M6.5): ways a wrong or unbacked number could have passed", () => {
+    const J = `evidence/raw/EXP-001/${JOB}`;
+    const proof = (p: string, sources: string[]) => check(claim({ proof: p, sources: [`100000 ← ${R}:2 «${row2}» [input]`, `400000 ← ${R}:4 «${row4}» [input]`, ...sources] }));
+    const errs = async (p: string, sources: string[] = []) => (await proof(p, sources)).errors;
+
+    it("#1 agent-written text is not a result: job/ files, MANIFEST.json, job records, undeclared files", async () => {
+      await ledger.writeArtifacts(
+        [
+          { path: `${J}/job/fake.csv`, content: "n,primes\n100000,9593\n" },
+          { path: `${J}/extra.csv`, content: "n,primes\n100000,9593\n" },
+          { path: `engine/jobs/${JOB}.json`, content: '{\n  "description": "expect 9593 primes"\n}\n' },
+          { path: `${J}/logs/stdout.log`, content: "9592 primes found\n" },
+        ],
+        P.aiExecuted("m1", "high"),
+        "planted",
+      );
+      const e = await errs("9593 primes.", [`9593 ← ${J}/job/fake.csv:2 «100000,9593» [result]`, `9593 ← ${J}/extra.csv:2 «100000,9593» [result]`, `9593 ← engine/jobs/${JOB}.json:2 «  "description": "expect 9593 primes"» [result]`, `9593 ← ${J}/MANIFEST.json:1 «${MANIFEST}» [result]`]);
+      expect(e.filter((x) => x.startsWith("source"))).toEqual([
+        `source 9593: ${J}/job/fake.csv: job/ holds the files the agent wrote, not what the job produced; cite them as [input]`,
+        `source 9593: ${J}/extra.csv: extra.csv is not an output the executor fetched for job ${JOB}`,
+        `source 9593: engine/jobs/${JOB}.json: results come only from a job's outputs (evidence/raw/<EXP>/<job>/) or parser tables (evidence/tables/)`,
+        `source 9593: ${J}/MANIFEST.json: MANIFEST.json is bookkeeping, not a result`,
+      ]);
+      // A declared log tail is an output; the coverage report shows each number's tag.
+      const ok = await proof("9592 primes.", [`9592 ← ${J}/logs/stdout.log:1 «9592 primes found» [result]`]);
+      expect(ok.errors).toEqual([]);
+      expect(ok.coverage.find((c) => c.number === "9592")).toMatchObject({ tag: "result" });
+      expect((await proof("9592 primes.", [`9592 ← ${R}:2 «${row2}» [input]`])).warnings).toContain("Proof: 9592 is backed only by an [input] source; if it is a measured value, cite the job's output");
+    });
+
+    it("#2 numbers can't hide in markup, separators, dates, dots, or invisible text", async () => {
+      for (const p of ["_9593_ primes.", "9593/100000 primes.", "12.5GB/s and 9593 primes.", "[9593](evidence/x) primes.", "on 2026-10-14 9593 primes.", "...9593 primes.", "found `9593` primes."]) {
+        expect(await errs(p), p).toContain("Proof: 9593 is not backed by a checked source");
+      }
+      for (const [p, what] of [["９５９２ primes.", "digits other than 0-9"], ["95\u200b92 primes.", "invisible formatting characters"], ["95<!-- -->92 primes.", "an HTML comment"]]) {
+        expect((await errs(p!)).join("\n"), p).toContain(`Proof contains ${what}, which could hide a number`);
+      }
+      // Identifier-shaped code spans and ids are not quantities.
+      expect(await errs(`Job \`${JOB}\` (\`evidence/raw/x.csv\`, Slurm \`24.11.5\`): 9592 primes below 100000.`, [`9592 ← ${R}:2 «${row2}» [result]`])).toEqual([]);
+    });
+
+    it("#3 the title is covered, and a source value is one number with a unit", async () => {
+      const r = await check(claim().replace("## C??: Pure-Python sieve time grows about linearly with N", "## C??: Python sieve is 50x faster than C"));
+      expect(r.errors).toContain("Title: 50 is not backed by a checked source");
+      expect((await errs("9592 primes.", [`9592 (50x faster than C) ← ${R}:2 «${row2}» [result]`])).join("\n")).toContain("source value «9592 (50x faster than C)» must be one number with an optional unit");
+    });
+
+    it("#5 no double rounding: prose is compared with the file's number", async () => {
+      await ledger.writeArtifacts([{ path: `${J}/stdout.csv`, content: "x\n3.46\n" }, { path: `${J}/MANIFEST.json`, content: JSON.stringify({ files: [{ path: "results.csv" }, { path: "stdout.csv" }], logs: [] }) }], P.aiExecuted("m1", "high"), "x");
+      expect(await errs("speedup 3.5.", [`3.5 ← ${J}/stdout.csv:2 «3.46» [result]`])).toEqual([]);
+      expect(await errs("speedup 4.", [`3.5 ← ${J}/stdout.csv:2 «3.46» [result]`])).toContain("Proof: 4 is not backed by a checked source");
+    });
+
+    it("#6 a CSV line's fields are separate numbers (8,512 is 8 and 512)", async () => {
+      await ledger.writeArtifacts([{ path: `${J}/t.csv`, content: "a,b\n8,512\n" }, { path: `${J}/MANIFEST.json`, content: JSON.stringify({ files: [{ path: "results.csv" }, { path: "t.csv" }], logs: [] }) }], P.aiExecuted("m1", "high"), "x");
+      expect((await errs("8512 ms.", [`8512 ← ${J}/t.csv:2 «8,512» [result]`]))[0]).toBe(`source 8512: 8512 is not in ${J}/t.csv:2 (numbers there: 8, 512)`);
+    });
+
+    it("#7 trace nodes: whole numbers inside the quote only, and never a result", async () => {
+      await ledger.addNode({ type: "decision", title: "Scale", choice: "Use 1024 ranks", alternatives: ["512"], evidence: [] }, P.user);
+      expect((await errs("102 ranks.", ["102 ← N01:choice «Use 102» [input]"]))[0]).toBe("source 102: 102 is not in N01.choice (numbers there: none)");
+      expect(await errs("1024 ranks.", ["1024 ← N01:choice «Use 1024 ranks» [input]"])).toEqual([]);
+      expect((await errs("1024 ranks.", ["1024 ← N01:choice «Use 1024 ranks» [result]"]))[0]).toMatch(/results come from evidence\/, not from trace nodes/);
+    });
+
+    it("#10 a directory is not a file", async () => {
+      expect(await ledgerReader(ledger).read("evidence/raw")).toBeUndefined();
+    });
   });
 
   it("warns about numbers in the Statement and sources no number uses", async () => {
@@ -197,7 +269,7 @@ describe("re claim check (CLI)", () => {
     const base = await mkdtemp(join(tmpdir(), "cairn-claim-cli-"));
     try {
       const ledger = await Ledger.create({ projectsDir: join(base, "projects"), name: "demo", title: "Demo", dataClass: "unpublished" });
-      await ledger.writeArtifacts([{ path: R, content: CSV }], P.aiExecuted("m1", "high"), "results");
+      await ledger.writeArtifacts([{ path: R, content: CSV }, { path: R.replace("results.csv", "MANIFEST.json"), content: MANIFEST }], P.aiExecuted("m1", "high"), "results");
       const stores = { oauth: new InMemoryCredentialStore(), api_key: new InMemoryCredentialStore() };
       const engine = new Engine(
         {

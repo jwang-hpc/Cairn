@@ -1,5 +1,5 @@
 // The ledger as committed, for the support check: sources must already be in the project's history.
-import { git } from "@cairn/launcher";
+import { git, gitBlob } from "@cairn/launcher";
 import { parseDocument } from "yaml";
 import type { Ledger } from "../ledger/ledger.js";
 import { flatten, validateTree } from "../ledger/tree.js";
@@ -12,7 +12,7 @@ export function ledgerReader(ledger: Ledger, rev = "HEAD"): SourceReader {
     revision: at,
     async read(path) {
       try {
-        return await git(ledger.dir, ["show", `${await at()}:${path}`]);
+        return (await gitBlob(ledger.dir, await at(), path)).toString("utf8");
       } catch {
         return undefined;
       }

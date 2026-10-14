@@ -4,11 +4,12 @@
 // no model) with only its input and code mounted; tests run it on the host.
 import { execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { lstat, mkdir, mkdtemp, open, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, posix } from "node:path";
 import { promisify } from "node:util";
-import { ContainerRuntime, git, launchSandbox, type Sandbox, type SandboxOptions } from "@cairn/launcher";
+import { ContainerRuntime, git, gitBlob, launchSandbox, type Sandbox, type SandboxOptions } from "@cairn/launcher";
 import { type Provenance, provenance, type RolesConfig } from "@cairn/shared";
 import { type Ledger, LedgerError } from "../ledger/ledger.js";
 import { REPO_ROOT } from "../paths.js";
@@ -70,11 +71,17 @@ async function collect(root: string, stdout: string): Promise<ParserRun> {
   let total = 0;
   for (const name of (await readdir(join(root, "out"))).sort()) {
     const p = join(root, "out", name);
-    const s = await stat(p);
-    if (!s.isFile() || !NAME.test(name)) throw new Error(`parser wrote ${name}, which is not a plain file name`);
+    // lstat, and open without following links: a parser must not hand the host a symlink to a host file.
+    const s = await lstat(p);
+    if (!s.isFile() || !NAME.test(name)) throw new Error(`parser wrote ${name}, which is not a regular file with a plain name`);
     total += s.size;
     if (total > OUTPUT_LIMIT) throw new Error(`parser output exceeds ${OUTPUT_LIMIT} bytes`);
-    outputs.push({ path: name, content: await readFile(p) });
+    const h = await open(p, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      outputs.push({ path: name, content: await h.readFile() });
+    } finally {
+      await h.close();
+    }
   }
   const listed = new Set(manifest.outputs.map((o) => o.path));
   if (outputs.some((o) => !listed.has(o.path)) || listed.size !== outputs.length) throw new Error("parser manifest doesn't match the files it wrote");
@@ -175,7 +182,7 @@ export async function parseEvidence(ledger: Ledger, sel: { experiment: string; j
     for (const rel of rels.sort()) {
       if (rel === "MANIFEST.json" || rel.startsWith("logs/") || rel.startsWith("job/")) continue;
       for (const parser of parsersFor(registry, rel)) {
-        const content = Buffer.from(await git(ledger.dir, ["show", `HEAD:${base}${job}/${rel}`]));
+        const content = await gitBlob(ledger.dir, "HEAD", `${base}${job}/${rel}`);
         const r = await runner.run(parser, { name: posix.basename(rel), content });
         const dir = posix.join(`evidence/tables/${sel.experiment}/${job}`, posix.dirname(rel));
         for (const o of r.outputs) writes.push({ path: posix.join(dir, o.path), content: o.content });

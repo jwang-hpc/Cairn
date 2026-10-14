@@ -53,6 +53,17 @@ export async function git(cwd: string, args: readonly string[]): Promise<string>
   }
 }
 
+/** A file's exact bytes at a revision (`git cat-file blob`): no text decoding, and a directory is an error, not a listing. */
+export async function gitBlob(cwd: string, rev: string, path: string): Promise<Buffer> {
+  try {
+    const { stdout } = await run("git", [...HARDEN, "-C", cwd, "cat-file", "blob", `${rev}:${path}`], { env: gitEnv(), maxBuffer: 256 << 20, encoding: "buffer" });
+    return stdout;
+  } catch (e) {
+    const err = e as { stderr?: Buffer | string; message: string };
+    throw new WorktreeError(`git cat-file failed: ${(err.stderr?.toString() || err.message).trim().split("\n").at(-1)}`);
+  }
+}
+
 const AGENT_ID = /^[a-z0-9][a-z0-9-]{0,47}$/;
 
 async function exists(p: string): Promise<boolean> {

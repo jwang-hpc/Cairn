@@ -7,6 +7,7 @@
 //     - 512 ← [pending: the 512-node run hasn't been fetched]
 // The id is assigned when the user approves the claim; a draft's heading id is ignored.
 import { CLAIM_REQUIRED, CLAIM_STATUSES, type ClaimDraft, type SourceEntry } from "@cairn/shared";
+import { hiddenContent, isSourceValue } from "./numbers.js";
 
 const HEADING = /^## (C[\w?-]*)\s*:\s*(.+)$/;
 const FIELD = /^- \*\*([^*]+)\*\*:\s?(.*)$/;
@@ -71,8 +72,13 @@ export function parseDraft(md: string): ClaimDraft {
   if (inline !== "" && inline !== "[]") sourceLines.unshift(inline);
   for (const s of sourceLines) {
     const e = parseSource(s);
-    if (e) draft.sources.push(e);
-    else draft.problems.push(`unreadable source entry: ${s} (expected: <value> ← <file:line> «verbatim line» [input|result])`);
+    if (!e) draft.problems.push(`unreadable source entry: ${s} (expected: <value> ← <file:line> «verbatim line» [input|result])`);
+    else if (!isSourceValue(e.value)) draft.problems.push(`source value «${e.value}» must be one number with an optional unit (it is copied into claims.md)`);
+    else draft.sources.push(e);
+  }
+  for (const [where, text] of [["title", draft.title], ...Object.entries(draft.fields), ...sourceLines.map((s) => ["Sources", s])] as [string, string][]) {
+    const hidden = hiddenContent(text);
+    if (hidden) draft.problems.push(`${where} contains ${hidden}, which could hide a number; remove it`);
   }
   for (const k of CLAIM_REQUIRED) {
     if (k === "Sources" ? sourceLines.length === 0 : !(draft.fields[k] ?? "").trim()) draft.problems.push(`missing ${k}`);

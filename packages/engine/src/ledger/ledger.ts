@@ -1,8 +1,8 @@
 // Project ledger (DR-0007): one ARA artifact per git repository. Every write goes through this class, carries a
 // provenance tag, is appended to engine/ledger.jsonl, and is one git commit with a Cairn-Provenance trailer.
 // logic/claims.md is never written here: claims enter only through the claim gate (invariant 5, M6).
-import { appendFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { dirname, join, posix, relative } from "node:path";
+import { appendFile, mkdir, open, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { basename, dirname, join, posix, relative } from "node:path";
 import { AGENT_AUTHOR, git } from "@cairn/launcher";
 import {
   type ClaimDraft,
@@ -319,10 +319,12 @@ export class Ledger {
   /**
    * The claim gate (DR-0007, invariant 5): the only writer of logic/claims.md. Re-runs the code-only support check
    * against the ledger as committed (a passing report from earlier proves nothing now), requires a committed rigor
-   * review of this exact draft, and records the user's approval. An AI draft enters as user-revised; a user's draft
-   * as user. The claim, the draft, the support report, the review, and the approval are one commit.
+   * review of this exact draft, and records the user's approval. The claim enters as user-revised (the user approved
+   * a draft someone else, usually an agent, wrote) unless the user says it is their own (`own`); the draft's own
+   * Provenance field is never trusted. The claim, the draft, the support report, the review, and the approval are one
+   * commit; if the commit fails, nothing of it stays behind.
    */
-  async approveClaim(md: string, opts: { note?: string } = {}): Promise<{ id: string; provenance: Provenance; report: SupportReport; review: ClaimReview }> {
+  async approveClaim(md: string, opts: { note?: string; own?: boolean } = {}): Promise<{ id: string; provenance: Provenance; report: SupportReport; review: ClaimReview }> {
     const draft = parseDraft(md);
     const report = await checkSupport(draft, ledgerReader(this), this.now());
     if (!report.ok) throw new LedgerError(`the support check fails (${report.errors[0]}); see re claim check`);
@@ -338,15 +340,24 @@ export class Ledger {
       throw new LedgerError(`${CLAIMS} has changes made outside the gate; restore it first (git checkout -- ${CLAIMS})`);
     }
     const id = nextId("C", (await this.claims()).map((c) => c.id));
-    const p = /^user(-revised)?$/.test(draft.fields.Provenance?.trim() ?? "") ? (draft.fields.Provenance!.trim() as Provenance) : prov.userRevised;
+    const p = opts.own ? prov.user : prov.userRevised;
     const at = this.now();
-    await appendFile(join(this.dir, CLAIMS), `\n${renderClaim(id, draft, p, `${day(at)} (approved through the claim gate: engine/claims/${id}/)`)}`);
     const dir = `engine/claims/${id}`;
     const gate = { claim: id, draft_sha256: sha, support: report, review, approved: { by: p, at: at.toISOString(), ...(opts.note ? { note: opts.note } : {}) } };
-    await mkdir(join(this.dir, dir), { recursive: true });
-    await writeFile(join(this.dir, dir, "draft.md"), md);
-    await writeFile(join(this.dir, dir, "gate.json"), `${JSON.stringify(gate, null, 2)}\n`);
-    await this.#commit(GATE_OP, CLAIMS, id, p, `claim ${id}: ${draft.title}`, [CLAIMS, `${dir}/draft.md`, `${dir}/gate.json`]);
+    // Restore from what was there, not with git: the failure may be git itself (a locked index).
+    const before = await readFile(join(this.dir, CLAIMS), "utf8");
+    try {
+      await appendFile(join(this.dir, CLAIMS), `\n${renderClaim(id, draft, p, `${day(at)} (approved through the claim gate: engine/claims/${id}/)`)}`);
+      await mkdir(join(this.dir, dir), { recursive: true });
+      await writeFile(join(this.dir, dir, "draft.md"), md);
+      await writeFile(join(this.dir, dir, "gate.json"), `${JSON.stringify(gate, null, 2)}\n`);
+      await this.#commit(GATE_OP, CLAIMS, id, p, `claim ${id}: ${draft.title}`, [CLAIMS, `${dir}/draft.md`, `${dir}/gate.json`]);
+    } catch (e) {
+      // Leave claims.md as committed: a half-written claim would block every later ledger write.
+      await writeFile(join(this.dir, CLAIMS), before);
+      await rm(join(this.dir, dir), { recursive: true, force: true });
+      throw e;
+    }
     return { id, provenance: p, report, review };
   }
 
@@ -413,10 +424,47 @@ export class Ledger {
       throw new LedgerError("logic/claims.md changed outside the claim gate; refusing to commit");
     }
     const entry: LedgerWrite = { ts: new Date(this.now()).toISOString(), op, file, ...(id ? { id } : {}), provenance: prov, summary };
-    await appendFile(join(this.dir, LOG), `${JSON.stringify(entry)}\n`);
-    await git(this.dir, ["add", "--", ...new Set([...paths, LOG])]);
-    const who = isHumanProvenance(prov) ? [] : ["-c", `user.name=${AGENT_AUTHOR.name}`, "-c", `user.email=${AGENT_AUTHOR.email}`];
-    await git(this.dir, [...who, "-c", "commit.gpgsign=false", "commit", "--quiet", "--no-verify", "-m", `ledger: ${summary}`, "--trailer", `Cairn-Provenance: ${prov}`]);
+    // One writer at a time per project (an executor fetch can land while the user approves a claim), and each commit
+    // holds exactly its own paths, never whatever else happens to be staged.
+    await this.#locked(async () => {
+      const all = [...new Set([...paths, LOG])];
+      const logBefore = await readFile(join(this.dir, LOG), "utf8");
+      await appendFile(join(this.dir, LOG), `${JSON.stringify(entry)}\n`);
+      try {
+        await git(this.dir, ["add", "--", ...all]);
+        const who = isHumanProvenance(prov) ? [] : ["-c", `user.name=${AGENT_AUTHOR.name}`, "-c", `user.email=${AGENT_AUTHOR.email}`];
+        await git(this.dir, [...who, "-c", "commit.gpgsign=false", "commit", "--quiet", "--no-verify", "-m", `ledger: ${summary}`, "--trailer", `Cairn-Provenance: ${prov}`, ...(op === "create" ? [] : ["--", ...all])]);
+      } catch (e) {
+        await git(this.dir, ["reset", "-q", "--", ...all]).catch(() => {});
+        await writeFile(join(this.dir, LOG), logBefore);
+        throw e;
+      }
+    });
+  }
+
+  /** Cross-process lock for one project's commits (a lock file beside the project, outside its repository). */
+  async #locked<T>(fn: () => Promise<T>): Promise<T> {
+    const lock = join(dirname(this.dir), `.${basename(this.dir)}.lock`);
+    const t0 = Date.now();
+    for (;;) {
+      try {
+        const h = await open(lock, "wx", 0o600);
+        await h.writeFile(String(process.pid));
+        await h.close();
+        break;
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+        const age = await stat(lock).then((s) => Date.now() - s.mtimeMs, () => 0);
+        if (age > 120_000) await rm(lock, { force: true });
+        else if (Date.now() - t0 > 60_000) throw new LedgerError(`project ${this.name} is busy (${lock}); try again`);
+        else await new Promise((r) => setTimeout(r, 50));
+      }
+    }
+    try {
+      return await fn();
+    } finally {
+      await rm(lock, { force: true });
+    }
   }
 
   /** Path of a file relative to the project (for messages). */

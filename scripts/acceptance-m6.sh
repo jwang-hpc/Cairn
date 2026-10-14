@@ -44,7 +44,7 @@ echo "--- correct claim"
 re claim check "$TMP/correct.md" || { echo "FAIL: the correct claim did not pass" >&2; exit 1; }
 echo "--- the same claim with one wrong number in Proof ($WRONG instead of $N2)"
 if re claim check "$TMP/wrong.md" > "$TMP/wrong.out"; then cat "$TMP/wrong.out"; echo "FAIL: the wrong number was not flagged" >&2; exit 1; fi
-sed -n '/^errors:/,/^warnings:\|^checked:/p' "$TMP/wrong.out" | sed '$d'
+awk '/^errors:/{p=1} /^(warnings|checked):/{p=0} p' "$TMP/wrong.out"
 grep -q "Proof: $WRONG is not backed by a checked source" "$TMP/wrong.out" || { echo "FAIL: unexpected report" >&2; exit 1; }
 echo "part 1: OK (flagged by code alone; no model was called)"
 
@@ -72,7 +72,7 @@ re claim check "$REF" || { echo "the agent's draft failed the code check (shown 
 echo "== part 2d: rigor review (reviewer model)"
 re claim review "$REF"
 printf '\nApprove this claim into logic/claims.md? [y/N] '
-read -r ANSWER
+read -r ANSWER || ANSWER=""
 case "$ANSWER" in y|Y|yes) ;; *) echo "not approved; nothing written to logic/claims.md"; exit 0 ;; esac
 re claim approve "$REF" --note "M6 acceptance"
 re claim list
