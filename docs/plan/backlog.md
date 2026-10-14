@@ -82,37 +82,52 @@ the app assuming it (the CLI already does; DR-0013 amendment).
   - off for `restricted` unless the user allows it for that project (asked in the same dialog);
   - an allowlist of data classes for the literature services in engine.yaml, like the one for model providers.
 
-## Paper library across projects
-*Requested 2026-10-14.* Papers found in one project stay in that project. The literature agent searches for, resolves,
-and notes the same papers again in every project. A shared library would let it start from what is already known.
-- **Reference:** PiPilot's Paper Wiki (`lib/wiki/`, `docs/rfc/003-global-paper-wiki.md`):
-  - one global folder of model-written pages, keyed by DOI, then arXiv id, then title and year;
-  - concept pages that synthesize across papers;
-  - one writer agent, working in paced background cycles;
-  - a record of which projects contributed each paper.
+## Paper library across projects (Zotero)
+*Requested 2026-10-14; Zotero as the backend chosen the same day.* Papers found in one project stay in that project,
+and the literature agent re-finds the same papers each time. Zotero becomes the shared library. It is already the
+user's paper manager, with sync, group libraries, notes, and attachment storage, so Cairn adds no store of its own.
+PiPilot's Paper Wiki (RFC-003) informed what is shared and how papers are identified (DOI, then arXiv id, then title
+and year).
+- **What goes to Zotero, and what stays in the project:**
+  - To Zotero: the paper's verified metadata, from `literature.resolve`, and one child note. The note holds the
+    paper-level sections (Problem, Method, Setup, Key numbers, Limitations, Artifact) and their `based_on`.
+  - In the project: the relevance score and its reason, the synthesis, and anything about the project. Zotero
+    syncs to Zotero's servers, so one project's ideas must not travel through it.
+  - Restricted projects: they write nothing to Zotero, and no per-project collection names a restricted project.
+- **Reads:** two routes, both used only by the host engine. Agents can't reach either: their network is pinned
+  and blocked by the host firewall.
+  - **Local API** of Zotero desktop: `http://localhost:23119/api/`, read-only, no key. It needs Zotero running and
+    "Allow other applications on this computer to communicate with Zotero" turned on. It works offline and sees
+    the desktop's local copies of attachments, including WebDAV-synced files.
+  - **Web API:** `https://api.zotero.org`, with a read-only key. This is for an engine without Zotero desktop
+    (e.g. a headless workstation, M9). Attachments stored on WebDAV are **not** reachable this way; only Zotero
+    File Storage files are.
+  - The literature agent gets a read-only tool, e.g. `literature.library`, to search the user's library first.
+    Results are labelled untrusted data like any other, since imported metadata and group members' notes can
+    hold anything. Any paper cited from the library still goes through `literature.resolve` into
+    `lit/refs.bib`.
+- **Writes:** never by an agent. Only on a user action: `re literature accept` offers "also add to Zotero?", or a
+  separate `re library add`. Writes go through the Web API with a key allowed to write to one library only.
+  Suggested: a Zotero group "Cairn", or a "Cairn" collection, so Cairn's items stay apart from hand-curated ones.
+  Before creating an item, Cairn looks the paper up by DOI or arXiv id and attaches its note to an existing item
+  rather than making a duplicate.
+  - Each Cairn item gets the tag `cairn` and `Citation Key: <citekey>` in Extra (the Better BibTeX convention).
+  - Writes honour `Backoff`/`Retry-After`, at most 4 concurrent requests, and version preconditions.
+- **Keys:** a Zotero API key is a credential. It goes in the engine's secrets folder (`re literature key zotero`)
+  and never into a container, config, or git (invariants 1 and 8). Read-only and write keys can be separate.
+- **Full text and PDFs (later):** these come from the desktop's local copies (the local API or the storage folder),
+  never by sending PDFs to the agent whole. A parser turns them into text in the sandbox, as with evidence
+  (DR-0009).
+- **Needs approval when scheduled:**
+  - the domain `api.zotero.org`;
+  - the `literature.library` tool;
+  - how the engine reaches `localhost:23119` (host only).
 
-  Retrieval scans an index, which the RFC itself flags as not scaling past about 200 pages. Its generation runs
-  model calls outside the agent loop, which Cairn would route through the logged model layer instead (invariant 6).
-- **What is shared, and what isn't:**
-  - Shared: paper-level facts only. That means the identity, the verified BibTeX, and the note sections Problem,
-    Method, Setup, Key numbers, Limitations, and Artifact, each with its `based_on` (abstract or full text).
-  - Stays in the project: the relevance score and its reason, the synthesis, and anything about the project. A
-    library entry must not carry one project's ideas into another, or to a provider allowed only a lower data class.
-- **Where:** its own git repository (in the engine home, or a path the user chooses), with history and provenance
-  like a ledger. Entries are keyed by DOI or arXiv id, and their BibTeX is re-verified by the same check as
-  `lit/refs.bib`.
-- **Writes:** only the engine writes, never an agent directly. `re literature accept` offers to add the accepted
-  papers' sections to the library (or a separate `re library add`). One writer under a lock, as with the ledger.
-  A full-text note supersedes an abstract-only one; key numbers keep their source.
-- **Reads:** the literature agent searches the library before the public APIs. This needs a new read-only tool
-  (e.g. `literature.library`, which you approve as a new MCP tool) doing local keyword (BM25) search, with no
-  network and no model. A per-project read-only mount is the alternative. The app gets a library view (M8).
-- **Fits:** after M8. It also helps M10: the "recover a known related-work set" eval can measure what the library
-  saves.
+  No new dependency is needed: plain HTTP with fetch.
 - **Decide:**
-  - Location, and whether it syncs across machines (a git remote).
-  - Whether `restricted` projects contribute to it at all. Suggested: no. The papers are public, but which papers a
-    restricted project reads can itself be sensitive.
-  - What happens when two projects' notes on one paper differ: keep both with provenance, or the user picks.
-  - Search method: BM25 first. Embeddings would send note text to a provider, so they'd go through the data-class
-    gate.
+  - Personal library or a "Cairn" group.
+  - Whether Zotero items with no DOI or arXiv id (books, DOE/OSTI reports, theses) can be cited as user-vouched
+    references with `user` provenance, since `resolve` can't verify them.
+  - Whether to use Zotero's indexed full text (`qmode=everything`, `/fulltext`) for search.
+  - Whether per-project collections are worth the exposure.
+
