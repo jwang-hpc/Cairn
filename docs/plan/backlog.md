@@ -83,72 +83,53 @@ the app assuming it (the CLI already does; DR-0013 amendment).
   - an allowlist of data classes for the literature services in engine.yaml, like the one for model providers.
 
 ## Paper library across projects (Zotero)
-*Requested 2026-10-14; Zotero as the backend chosen the same day.* Papers found in one project stay in that project,
-and the literature agent re-finds the same papers each time. Zotero becomes the shared library. It is already the
-user's paper manager, with sync, group libraries, notes, and attachment storage, so Cairn adds no store of its own.
-PiPilot's Paper Wiki (RFC-003) informed what is shared and how papers are identified (DOI, then arXiv id, then title
-and year).
-- **What goes to Zotero, and what stays in the project:**
-  - To Zotero: the paper's verified metadata, from `literature.resolve`, and one child note. The note holds the
-    paper-level sections (Problem, Method, Setup, Key numbers, Limitations, Artifact) and their `based_on`.
-  - In the project: the relevance score and its reason, the synthesis, and anything about the project. Zotero
-    syncs to Zotero's servers, so one project's ideas must not travel through it.
-  - Restricted projects: they write nothing to Zotero, and no per-project collection names a restricted project.
-- **Reads:** two routes, both used only by the host engine. Agents can't reach either: their network is pinned
-  and blocked by the host firewall.
-  - **Local API** of Zotero desktop: `http://localhost:23119/api/`. Reads need no key. It needs Zotero running and
-    "Allow other applications on this computer to communicate with Zotero" turned on. It works offline and sees
-    the desktop's local copies of attachments, including WebDAV-synced files.
-  - **Web API:** `https://api.zotero.org`, with a read-only key. This is for an engine without Zotero desktop
-    (e.g. a headless workstation, M9). Attachments stored on WebDAV are **not** reachable this way; only Zotero
-    File Storage files are.
-  - The literature agent gets a read-only tool, e.g. `literature.library`, to search the user's library first.
-    Results are labelled untrusted data like any other, since imported metadata and group members' notes can
-    hold anything. Any paper cited from the library still goes through `literature.resolve` into
-    `lit/refs.bib`.
-- **Writes:** never by an agent. Only on a user action: `re literature accept` offers "also add to Zotero?", or a
-  separate `re library add`. Writes go to the "Cairn" group only, so Cairn's items stay apart from the user's
-  hand-curated library. Two routes:
-  - **Local API (Zotero 10+):** writes items, notes, and **files** through the desktop, which syncs them afterwards.
-    Every write needs a key granted in a Zotero dialog (Allow / Always Allow / Deny). Requesting a single-use key
-    per accept makes that dialog a human approval at the moment of writing. A local key isn't limited to one
-    library: it can write to any library the user can edit. So "Cairn group only" is enforced by Cairn's code,
-    and a single-use key per write is the safer default.
-  - **Web API:** a key that Zotero itself limits to writing the Cairn group, for an engine without Zotero desktop.
-  Before creating an item, Cairn looks the paper up by DOI or arXiv id and attaches its note to an existing item
-  rather than making a duplicate.
-  - Each Cairn item gets the tag `cairn` and `Citation Key: <citekey>` in Extra (the Better BibTeX convention).
-  - Writes honour `Backoff`/`Retry-After`, at most 4 concurrent requests, and version preconditions.
-- **Keys:** a Zotero API key is a credential. It goes in the engine's secrets folder (`re literature key zotero`)
-  and never into a container, config, or git (invariants 1 and 8). Read-only and write keys can be separate.
-- **Full text and PDFs (later):** these come from the desktop's local copies (the local API or the storage folder),
-  never by sending PDFs to the agent whole. A parser turns them into text in the sandbox, as with evidence
-  (DR-0009).
-- **Needs approval when scheduled:**
-  - the domain `api.zotero.org`;
-  - the `literature.library` tool;
-  - how the engine reaches `localhost:23119` (host only).
+*Requested and designed 2026-10-14.* Papers found in one project stay in that project, and the literature agent
+re-finds them every time. The user's Zotero library becomes the shared library. Zotero is already the user's paper
+manager (metadata synced by Zotero, PDFs on the user's WebDAV with local copies in Zotero desktop), so Cairn adds
+no store of its own. PiPilot's Paper Wiki (RFC-003) informed what is shared and how papers are identified (DOI,
+then arXiv id, then title and year).
 
-  No new dependency is needed: plain HTTP with fetch.
-- **Decided (2026-10-14):**
-  - **Storage:** the user keeps PDFs on WebDAV, with local copies in Zotero desktop. PDFs and full text therefore come
-    only through the desktop (local API or storage folder), never the Web API.
-  - **Writes:** Cairn writes only to a separate Zotero group, "Cairn". Its key may write to that group alone; the
-    user's personal library is read-only to Cairn. Cairn writes metadata and notes there, not PDFs: groups can't
-    use WebDAV, so any group file would go to Zotero's own storage, under the group owner's quota.
-  - **User-vouched citations:** an item in the user's personal library can be cited even when it has no DOI or
-    arXiv id that `literature.resolve` could verify, e.g. the MPI standard, software manuals, theses, or lab
-    reports. Its `refs.bib` entry is marked "vouched for by the user", with provenance `user` and the Zotero item
-    key, and `re literature check` verifies it against that Zotero item instead of the public services. Agents
-    can't write to the personal library, so they can't plant an item to cite. Items Cairn wrote to the "Cairn"
-    group don't count as vouched; they were verified by `resolve` anyway.
-- **Decide:**
-  - PDFs for Cairn's items. The library decides where a PDF syncs, not the write route. In the "Cairn" group a PDF
-    goes to Zotero's own storage, under the group owner's quota, because groups can't use WebDAV. Options:
-    attach PDFs there; attach them as linked files (the PDF stays in a local folder, nothing is uploaded, and it is
-    available only on this Mac); or attach none and let the user copy chosen items into their personal library
-    (WebDAV), where Zotero's "Find Available PDF" uses the user's own access. Cairn fetches no PDFs today. Open
-    copies from arXiv or Unpaywall would be new domains to approve.
-  - Whether to use Zotero's indexed full text (`qmode=everything`, `/fulltext`) for search.
-  - Whether per-project collections are worth the exposure.
+**Who does what.** Agents never touch Zotero; only the Cairn engine on the user's Mac does.
+
+| | Who | How | What |
+|---|---|---|---|
+| Search online | literature agent | `literature.search/fetch/expand` tools, run by the engine | Semantic Scholar, OpenAlex, arXiv, Crossref |
+| Search Zotero | literature agent | new read-only `literature.library` tool, run by the engine through the desktop's local API | metadata of the user's items (title, authors, year, ids); not the user's own notes or annotations |
+| Cite | literature agent | `literature.resolve` writes `lit/refs.bib` in its worktree | verified works, or works the user saved in Zotero ("vouched") |
+| Write to Zotero | Cairn engine, only when the user accepts | desktop local API (Zotero 10+), one Zotero "Allow" dialog per write | new items and notes in the "Cairn" collection |
+| PDFs | Zotero desktop | attached to items in the personal library; synced to the user's WebDAV like the user's own | whatever Zotero or Cairn attaches |
+
+- **Where Cairn writes:** the user's personal library, so PDFs sync to the user's WebDAV like the rest. Items go
+  under a parent collection "Cairn", with one subcollection per project, named after the project or its topic.
+  - Each item Cairn creates gets the tag `cairn`, `Citation Key: <citekey>` in Extra (the Better BibTeX
+    convention), and a child note with the paper-level sections (Problem, Method, Setup, Key numbers,
+    Limitations, Artifact, and `based_on`).
+  - If the paper is already in the library (found by DOI or arXiv id), Cairn adds that item to the project's
+    subcollection and adds its note. It never edits or deletes the user's fields or items.
+  - Restricted projects write nothing to Zotero.
+- **What stays in the project:** the relevance score and its reason, the synthesis, and anything about the project.
+  Zotero syncs to Zotero's servers, so one project's ideas don't travel through it.
+- **How writes are approved:** only after the user accepts in Cairn (`re literature accept` asks "also add to
+  Zotero?", or `re library add`). Each write then uses a single-use key that Zotero grants through its own
+  Allow/Deny dialog: two human approvals, and no stored write key. A local key can write to any library, so
+  "only the Cairn collection, never edit the user's items" is enforced by Cairn's code; the dialog is the
+  backstop. Writes need Zotero desktop running; with it closed, Cairn tells the user and writes nothing.
+- **PDFs:** Cairn fetches none at first. For a paper Cairn added, the user's Zotero "Find Available PDF" uses the
+  user's own (university) access, and the PDF lands on WebDAV. Later, Cairn could attach open copies from arXiv or
+  Unpaywall through the same local API; those are new domains to approve. Full text for agents comes from the
+  desktop's local copies, turned into text inside the sandbox; a PDF never goes to an agent whole (DR-0009).
+- **User-vouched citations:** an item the user saved can be cited even without a DOI or arXiv id that `resolve`
+  could verify (e.g. the MPI standard, software manuals, theses, lab reports).
+  - Its `refs.bib` entry is marked "vouched for by the user", with provenance `user` and the Zotero item key.
+  - `re literature check` verifies it against that Zotero item.
+  - Items Cairn created don't count as vouched. Cairn keeps its own record of the item keys it created (the
+    `cairn` tag can be edited), and those items were verified by `resolve` anyway.
+- **Agent reads are untrusted data,** like every other literature result: imported metadata can hold anything.
+- **Needs approval when scheduled:**
+  - the `literature.library` tool;
+  - the engine reaching `localhost:23119` (host only; agents can't, since their network is pinned and firewalled).
+
+  No new dependency is needed: plain HTTP with fetch. The Web API (`api.zotero.org`, a new domain) is needed only
+  for reading without Zotero desktop, e.g. a headless workstation.
+- **Decide:** whether search may use Zotero's indexed full text (it would show agents text from the user's PDFs).
 
