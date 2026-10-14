@@ -4,7 +4,17 @@ import type { JobRecord } from "@cairn/shared";
 import type { JobFileContent } from "./lint.js";
 
 const MAX_LINES = 400;
-const isText = (b: Buffer) => !b.subarray(0, 8192).includes(0);
+const isText = (b: Buffer) => !b.includes(0);
+
+/**
+ * Make agent- or machine-supplied text safe for a terminal: control characters (ESC, CR, backspace, ...), C1
+ * codes, and bidi overrides are shown as escapes, so nothing can redraw or hide parts of the card. One line unless
+ * multiline (tabs are kept).
+ */
+export function printable(text: string, multiline = false): string {
+  const t = multiline ? text : text.replace(/\r?\n/g, " ⏎ ");
+  return t.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, (c) => `\\u{${c.charCodeAt(0).toString(16).padStart(4, "0")}}`);
+}
 const fmtBytes = (n: number) => (n < 1024 ? `${n} B` : n < 1 << 20 ? `${(n / 1024).toFixed(1)} KiB` : `${(n / (1 << 20)).toFixed(1)} MiB`);
 
 export function renderCard(job: JobRecord, files: JobFileContent[], opts: { autoApproval?: string; approvedTwin?: string; snapshotDir?: string } = {}): string {
@@ -25,7 +35,7 @@ export function renderCard(job: JobRecord, files: JobFileContent[], opts: { auto
     ...lint.warnings.map((w) => `  ! ${w}`),
     "files:",
     ...job.files.map((f) => `  ${f.path}  ${fmtBytes(f.bytes)}  sha256 ${f.sha256.slice(0, 12)}`),
-  ];
+  ].map((l) => printable(l));
   // Every text file in full (capped), so approval never relies on a summary.
   for (const f of [...files].sort((x, y) => (x.path === manifest.script ? -1 : y.path === manifest.script ? 1 : x.path.localeCompare(y.path)))) {
     if (f.path === "job.json") continue;
@@ -34,7 +44,7 @@ export function renderCard(job: JobRecord, files: JobFileContent[], opts: { auto
       continue;
     }
     const body = f.content.toString("utf8").replace(/\n$/, "").split("\n");
-    lines.push(`── ${f.path}${f.path === manifest.script ? " (entry point)" : ""} ──`, ...body.slice(0, MAX_LINES));
+    lines.push(`── ${f.path}${f.path === manifest.script ? " (entry point)" : ""} ──`, ...body.slice(0, MAX_LINES).map((l) => printable(l, true)));
     if (body.length > MAX_LINES) lines.push(`[${body.length - MAX_LINES} more lines${opts.snapshotDir ? `; full file in ${opts.snapshotDir}` : ""}]`);
   }
   lines.push("──");

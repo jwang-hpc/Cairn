@@ -6,6 +6,7 @@
 # CALLS A REAL MODEL (one coder run) and RUNS A SMALL JOB on the target. Removes any previous m5-demo project.
 set -eu
 cd "$(dirname "$0")/.."
+unset CAIRN_PROJECT   # it would override `re project use` below
 re() { node packages/engine/dist/bin.js "$@"; }
 TARGET="${1:-workstation}"
 OUT="$(mktemp "${TMPDIR:-/tmp}/cairn-m5.XXXXXX")"
@@ -39,15 +40,20 @@ EOF
 
 echo "== coder agent (real model, sandbox)"
 re run --role coder --task "$TASK" | tee "$OUT" || true
-ID="$(sed -n 's/^job  *\([0-9a-f-]*\) pending_approval.*/\1/p' "$OUT" | head -n 1)"
+ID="$(sed -n 's/^job  *\([0-9a-f-]*\) [a-z_]* .*/\1/p' "$OUT" | head -n 1)"
+FIRST="$(sed -n 's/^job  *[0-9a-f-]* \([a-z_]*\) .*/\1/p' "$OUT" | head -n 1)"
 [ -n "$ID" ] || { echo "FAIL: the agent did not submit a job (see the run output above)" >&2; exit 1; }
 
 echo "== approval card for $ID"
 re job show "$ID"
-printf '\nApprove job %s? [y/N] ' "$ID"
-read -r ANSWER
-case "$ANSWER" in y|Y|yes) ;; *) re job deny "$ID" --reason "declined during M5 acceptance"; echo "denied; acceptance not completed" >&2; exit 1 ;; esac
-re job approve "$ID" --note "M5 acceptance"
+if [ "$FIRST" = pending_approval ]; then
+  printf '\nApprove job %s? [y/N] ' "$ID"
+  read -r ANSWER
+  case "$ANSWER" in y|Y|yes) ;; *) re job deny "$ID" --reason "declined during M5 acceptance"; echo "denied; acceptance not completed" >&2; exit 1 ;; esac
+  re job approve "$ID" --note "M5 acceptance"
+else
+  echo "note: job is $FIRST (auto-approved as an identical rerun of a job you approved earlier)"
+fi
 
 echo "== waiting for the job"
 i=0

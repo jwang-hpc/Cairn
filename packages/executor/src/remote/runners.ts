@@ -2,6 +2,7 @@
 // generated here from validated values, single-quoted as a second layer, and sent to `sh -s`; raw output is
 // returned for the audit log. Job directories live at <scratch>/cairn/<project>/<job>/ with Cairn's own state in
 // .cairn/ next to the user's files.
+import { randomBytes } from "node:crypto";
 import { JOB_FILE_PATTERN, JOB_ID_PATTERN, type JobLint, type JobManifest, type JobState, type MachineConfig } from "@cairn/shared";
 import type { JobFileContent } from "../jobs/lint.js";
 import { type RunResult, SSH_CONNECT_FAILED, type Transport } from "./transport.js";
@@ -27,7 +28,8 @@ export interface RemoteJob {
 }
 
 export interface RemoteStatus {
-  state: JobState;
+  /** "unknown": the machine could not say (scheduler error); keep the last known state. */
+  state: JobState | "unknown";
   detail: string;
   raw: string;
 }
@@ -53,6 +55,8 @@ export interface Runner {
   preflight(job: RemoteJob): Promise<{ ok: boolean; detail: string; raw: string } | undefined>;
   /** Upload the files and start the job; returns the machine's id for it. */
   start(job: RemoteJob): Promise<{ id: string; raw: string }>;
+  /** An earlier launch attempt that may have started although its launch reported a failure (job.dir = that attempt). */
+  find(job: RemoteJob): Promise<{ id: string; raw: string } | undefined>;
   status(job: RemoteJob, remoteId: string): Promise<RemoteStatus>;
   cancel(job: RemoteJob, remoteId: string): Promise<{ raw: string }>;
   fetch(job: RemoteJob): Promise<FetchResult>;
@@ -111,56 +115,68 @@ export function uploadScript(dir: string, files: { path: string; content: Buffer
       lines.push(`mkdir -p ${shq(parent)}`);
     }
     lines.push(`base64 -d > ${shq(f.path)} <<'CAIRN_B64'`, ...(f.content.toString("base64").match(/.{1,76}/g) ?? []), "CAIRN_B64");
+    if (f.content.subarray(0, 2).toString() === "#!") lines.push(`chmod 700 ${shq(f.path)}`);
   }
   lines.push(`echo "uploaded=${files.length}"`);
   return `${lines.join("\n")}\n`;
 }
 
-/** Copy declared outputs back: regular files inside the job directory only, size-capped, base64 on stdout. */
-export function fetchScript(dir: string, outputs: string[]): string {
+/**
+ * Copy declared outputs back: regular, single-link files inside the job directory only, size-capped, base64 on
+ * stdout. Every line we emit carries a random per-call marker, so nothing else that prints (a login script, the
+ * job's leftovers) can pose as a file.
+ */
+export function fetchScript(dir: string, outputs: string[], marker: string): string {
   must(DIR_RE.test(dir), "directory", dir);
+  must(/^[0-9a-f]{16}$/.test(marker), "marker", marker);
   for (const o of outputs) must(FILE_RE.test(o), "output", o);
+  const M = `=== ${marker}`;
   return `${[
     `D=${shq(dir)}`,
     `MAX=${FETCH_LIMITS.fileBytes}`,
-    'cd "$D" 2>/dev/null || { echo "=== NODIR"; exit 0; }',
+    `cd "$D" 2>/dev/null || { echo "${M} NODIR"; exit 0; }`,
     "ROOT=$(pwd -P)",
     "emit() {",
     '  f="$1"',
-    '  if [ -L "$f" ]; then echo "=== REFUSED symlink $f"; return; fi',
-    '  if [ ! -f "$f" ]; then echo "=== MISSING $f"; return; fi',
-    '  case "$(cd "$(dirname "$f")" 2>/dev/null && pwd -P)/" in "$ROOT"/*) ;; *) echo "=== REFUSED outside $f"; return ;; esac',
-    '  if [ -z "$(find "$f" -prune -links 1)" ]; then echo "=== REFUSED hardlink $f"; return; fi',
+    `  if [ -L "$f" ]; then echo "${M} REFUSED symlink $f"; return; fi`,
+    `  if [ ! -f "$f" ]; then echo "${M} MISSING $f"; return; fi`,
+    `  case "$(cd "$(dirname "$f")" 2>/dev/null && pwd -P)/" in "$ROOT"/*) ;; *) echo "${M} REFUSED outside $f"; return ;; esac`,
+    `  if [ -z "$(find "$f" -prune -links 1)" ]; then echo "${M} REFUSED hardlink $f"; return; fi`,
     "  s=$(wc -c < \"$f\" | tr -d ' ')",
-    '  if [ "$s" -gt "$MAX" ]; then echo "=== BIG $s $f"; return; fi',
-    '  echo "=== FILE $s $f"; base64 < "$f"; echo "=== END"',
+    `  if [ "$s" -gt "$MAX" ]; then echo "${M} BIG $s $f"; return; fi`,
+    `  echo "${M} FILE $s $f"; base64 < "$f"; echo "${M} END"`,
     "}",
     ...outputs.map((o) => `emit ${shq(o)}`),
     "for l in stdout stderr; do",
     '  f=".cairn/$l.log"',
-    `  if [ -f "$f" ] && [ ! -L "$f" ]; then echo "=== LOG $l"; tail -c ${FETCH_LIMITS.logBytes} "$f" | base64; echo "=== END"; fi`,
+    `  if [ -f "$f" ] && [ ! -L "$f" ]; then echo "${M} LOG $l"; tail -c ${FETCH_LIMITS.logBytes} "$f" | base64; echo "${M} END"; fi`,
     "done",
-    'echo "=== ROOT $ROOT"',
   ].join("\n")}\n`;
 }
 
-export function parseFetch(dir: string, out: string, rawText: string): FetchResult {
+/** Parse fetch output: only marker lines, and only the declared outputs and the two logs, are accepted. */
+export function parseFetch(dir: string, out: string, rawText: string, outputs: string[], marker: string): FetchResult {
   const res: FetchResult = { files: [], referenced: [], missing: [], refused: [], logs: [], raw: rawText };
+  const declared = new Set(outputs);
+  const M = `=== ${marker} `;
   const lines = out.split("\n");
   let total = 0;
   for (let i = 0; i < lines.length; i++) {
     const l = lines[i]!;
+    if (!l.startsWith(M)) continue;
+    const rest = l.slice(M.length);
     let m: RegExpExecArray | null;
-    if (l === "=== NODIR") throw new RemoteError(`job directory ${dir} is gone`, rawText);
-    if ((m = /^=== MISSING (.+)$/.exec(l))) res.missing.push(m[1]!);
-    else if ((m = /^=== REFUSED (\S+) (.+)$/.exec(l))) res.refused.push({ path: m[2]!, reason: m[1]! });
-    else if ((m = /^=== BIG (\d+) (.+)$/.exec(l))) res.referenced.push({ path: `${dir}/${m[2]}`, bytes: Number(m[1]) });
-    else if ((m = /^=== (FILE (\d+)|LOG) (.+)$/.exec(l))) {
+    if (rest === "NODIR") throw new RemoteError(`job directory ${dir} is gone`, rawText);
+    if ((m = /^MISSING (.+)$/.exec(rest)) && declared.has(m[1]!)) res.missing.push(m[1]!);
+    else if ((m = /^REFUSED (\S+) (.+)$/.exec(rest)) && declared.has(m[2]!)) res.refused.push({ path: m[2]!, reason: m[1]! });
+    else if ((m = /^BIG (\d+) (.+)$/.exec(rest)) && declared.has(m[2]!)) res.referenced.push({ path: `${dir}/${m[2]}`, bytes: Number(m[1]) });
+    else if ((m = /^(FILE (\d+) (.+)|LOG (stdout|stderr))$/.exec(rest))) {
       const body: string[] = [];
-      while (i + 1 < lines.length && lines[i + 1] !== "=== END") body.push(lines[++i]!);
+      while (i + 1 < lines.length && lines[i + 1] !== `${M}END`) body.push(lines[++i]!);
       i++;
       const content = Buffer.from(body.join(""), "base64");
-      if (m[1] === "LOG") res.logs.push({ path: `${m[3]}.log`, content });
+      if (m[4]) res.logs.push({ path: `${m[4]}.log`, content });
+      else if (!declared.has(m[3]!)) continue;
       else if (content.length !== Number(m[2])) res.refused.push({ path: m[3]!, reason: `size mismatch (${content.length} != ${m[2]})` });
       else if (total + content.length > FETCH_LIMITS.totalBytes) res.referenced.push({ path: `${dir}/${m[3]}`, bytes: content.length });
       else {
@@ -172,11 +188,19 @@ export function parseFetch(dir: string, out: string, rawText: string): FetchResu
   return res;
 }
 
+async function fetchOutputs(transport: Transport, job: RemoteJob): Promise<FetchResult> {
+  const marker = randomBytes(8).toString("hex");
+  const r = checked(transport, await transport.run(fetchScript(job.dir, job.manifest.outputs, marker), { timeoutMs: 600_000 }), "fetch");
+  return parseFetch(job.dir, r.out, `exit ${r.code} (${r.ms} ms, ${r.out.length} bytes)\n--- stderr\n${r.err}`, job.manifest.outputs, marker);
+}
+
 // ---------- workstation (no scheduler) ----------
 
 /**
  * The job runs in its own process group (perl's setpgrp: portable, no setsid or job control needed) under a
- * wall-clock watchdog; exit code and timestamps land in .cairn/.
+ * wall-clock watchdog. When the job's main process exits, whatever it left behind in its group is stopped too, so
+ * nothing outlives the job. Cancel is a TERM to the runner, which stops its own job group: the job's pid lives only
+ * in the runner's variable, never in a file the job could rewrite. Exit code and timestamps land in .cairn/.
  */
 export function workstationRunner(script: string, walltimeSeconds: number): string {
   must(FILE_RE.test(script), "script", script);
@@ -185,20 +209,36 @@ export function workstationRunner(script: string, walltimeSeconds: number): stri
     "#!/bin/sh",
     "# Cairn workstation runner (generated). The job runs in its own process group under a wall-clock limit.",
     'cd "$(dirname "$0")/.." || exit 1',
-    "echo $$ > .cairn/runner.pid",
     "date -u +%Y-%m-%dT%H:%M:%SZ > .cairn/started",
     `${pg} bash ./${shq(script)} > .cairn/stdout.log 2> .cairn/stderr.log < /dev/null &`,
     "JOB=$!",
+    `trap 'echo cancelled > .cairn/killed; kill -s TERM -- -"$JOB" 2>/dev/null' TERM`,
     'echo "$JOB" > .cairn/pid',
     `${pg} sh -c 'sleep "$1"; echo walltime > .cairn/killed; kill -s TERM -- -"$2" 2>/dev/null; sleep 30; kill -s KILL -- -"$2" 2>/dev/null' cairn-watchdog ${Math.ceil(walltimeSeconds)} "$JOB" > /dev/null 2>&1 < /dev/null &`,
     "DOG=$!",
     'wait "$JOB"',
     "CODE=$?",
+    'if kill -s TERM -- -"$JOB" 2>/dev/null; then sleep 1; kill -s KILL -- -"$JOB" 2>/dev/null; fi',
     'kill -s TERM -- -"$DOG" 2>/dev/null',
     'echo "$CODE" > .cairn/exit.tmp && mv .cairn/exit.tmp .cairn/exit',
     "date -u +%Y-%m-%dT%H:%M:%SZ > .cairn/finished",
   ].join("\n")}\n`;
 }
+
+/** Workstation job id: the runner's pid, captured by the start script as $! (never read back from the job's files). */
+function runnerPid(remoteId: string): string {
+  if (!/^[1-9]\d*$/.test(remoteId) || remoteId === "1") throw new RemoteError(`bad workstation job id ${JSON.stringify(remoteId)}`, "");
+  return remoteId;
+}
+
+/** sh snippet: alive=1 if the runner still runs; where ps works, it must also still be our runner (pid reuse). */
+const runnerAlive = (pid: string) =>
+  [
+    `alive=0; if kill -0 ${pid} 2>/dev/null; then alive=1`,
+    `  A=$(ps -o args= -p ${pid} 2>/dev/null) || A=""`,
+    '  case "$A" in ""|*.cairn/run.sh*) ;; *) alive=0 ;; esac',
+    'fi; echo "alive=$alive"',
+  ].join("\n");
 
 export class WorkstationRunner implements Runner {
   constructor(readonly transport: Transport) {}
@@ -216,55 +256,79 @@ export class WorkstationRunner implements Runner {
       'command -v perl > /dev/null 2>&1 || { echo "cairn: perl is required on this machine" >&2; exit 4; }',
       'command -v bash > /dev/null 2>&1 || { echo "cairn: bash is required on this machine" >&2; exit 4; }',
       "nohup sh .cairn/run.sh > /dev/null 2>&1 < /dev/null &",
+      "RP=$!",
+      'echo "$RP" > .cairn/runner.pid',
+      // .cairn/pid appears once the job runs and the runner's cancel trap is set.
       "i=0; while [ ! -s .cairn/pid ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done",
-      'echo "pid=$(cat .cairn/pid 2>/dev/null)"',
+      '[ -s .cairn/pid ] || { echo "cairn: the job did not start within 10 s" >&2; exit 5; }',
+      'echo "id=$RP"',
     ].join("\n");
     const r = checked(this.transport, await this.transport.run(`${start}\n`), "start");
-    const pid = kv(r.out).pid;
-    if (!pid || !/^\d+$/.test(pid)) throw new RemoteError(`job did not start on ${this.transport.host}`, `${raw(up)}\n${raw(r)}`);
-    return { id: pid, raw: `${raw(up)}\n${raw(r)}` };
+    const id = kv(r.out).id ?? "";
+    try {
+      runnerPid(id);
+    } catch {
+      throw new RemoteError(`job did not start on ${this.transport.host}`, `${raw(up)}\n${raw(r)}`);
+    }
+    return { id, raw: `${raw(up)}\n${raw(r)}` };
   }
 
-  async status(job: RemoteJob, _remoteId?: string): Promise<RemoteStatus> {
+  async find(job: RemoteJob): Promise<{ id: string; raw: string } | undefined> {
+    // Only after an ambiguous launch failure. runner.pid was written by our start script; where ps works, the pid
+    // must still be our runner (or be gone, with the exit file the runner writes).
     const script = [
-      `cd ${shq(job.dir)} 2>/dev/null || { echo "dir=missing"; exit 0; }`,
+      `cd ${shq(job.dir)} 2>/dev/null || exit 0`,
+      "RP=$(cat .cairn/runner.pid 2>/dev/null)",
+      'case "$RP" in ""|*[!0-9]*|0|1) exit 0 ;; esac',
+      'A=$(ps -o args= -p "$RP" 2>/dev/null) || A=""',
+      'case "$A" in ""|*.cairn/run.sh*) echo "rp=$RP" ;; esac',
+    ].join("\n");
+    const r = checked(this.transport, await this.transport.run(`${script}\n`), "find");
+    const id = kv(r.out).rp ?? "";
+    return /^[1-9]\d+$/.test(id) ? { id, raw: raw(r) } : undefined;
+  }
+
+  async status(job: RemoteJob, remoteId: string): Promise<RemoteStatus> {
+    const rp = runnerPid(remoteId);
+    const script = [
+      `[ -d ${shq(job.dir)} ] || { echo "dir=missing"; exit 0; }`,
+      `cd ${shq(job.dir)} || { echo "dir=unreadable"; exit 0; }`,
       // Liveness first: the runner writes .cairn/exit before it exits, so reading exit afterwards can't miss it.
-      "alive=0",
-      'for f in pid runner.pid; do P=$(cat .cairn/$f 2>/dev/null); if [ -n "$P" ] && kill -0 "$P" 2>/dev/null; then alive=1; fi; done',
-      'echo "alive=$alive"',
+      runnerAlive(rp),
       'for k in exit killed started finished; do printf \'%s=%s\\n\' "$k" "$(cat .cairn/$k 2>/dev/null)"; done',
     ].join("\n");
     const r = checked(this.transport, await this.transport.run(`${script}\n`), "status");
     return { ...parseWorkstationStatus(kv(r.out)), raw: raw(r) };
   }
 
-  async cancel(job: RemoteJob, _remoteId?: string): Promise<{ raw: string }> {
+  async cancel(job: RemoteJob, remoteId: string): Promise<{ raw: string }> {
+    const rp = runnerPid(remoteId);
     const script = [
       `cd ${shq(job.dir)} 2>/dev/null || exit 0`,
-      'if [ -s .cairn/exit ]; then echo "already=1"; exit 0; fi',
-      "echo cancelled > .cairn/killed",
-      "P=$(cat .cairn/pid 2>/dev/null)",
-      'if [ -n "$P" ]; then kill -s TERM -- -"$P" 2>/dev/null || true; nohup sh -c \'sleep 10; kill -s KILL -- -"$1" 2>/dev/null\' cairn-cancel "$P" > /dev/null 2>&1 < /dev/null & fi',
+      runnerAlive(rp),
+      'if [ "$alive" = 0 ]; then echo "already=1"; exit 0; fi',
+      // The runner's trap stops its own job group, then its usual cleanup (TERM, 1 s, KILL) finishes the job.
+      `kill -s TERM ${rp}`,
       'echo "cancelled=1"',
     ].join("\n");
     return { raw: raw(checked(this.transport, await this.transport.run(`${script}\n`), "cancel")) };
   }
 
   async fetch(job: RemoteJob): Promise<FetchResult> {
-    const r = checked(this.transport, await this.transport.run(fetchScript(job.dir, job.manifest.outputs), { timeoutMs: 600_000 }), "fetch");
-    return parseFetch(job.dir, r.out, `exit ${r.code} (${r.ms} ms, ${r.out.length} bytes)\n--- stderr\n${r.err}`);
+    return fetchOutputs(this.transport, job);
   }
 }
 
-export function parseWorkstationStatus(f: Record<string, string>): { state: JobState; detail: string } {
+export function parseWorkstationStatus(f: Record<string, string>): { state: JobState | "unknown"; detail: string } {
   if (f.dir === "missing") return { state: "lost", detail: "job directory is gone" };
+  if (f.dir === "unreadable") return { state: "unknown", detail: "job directory not readable right now" };
+  if (f.alive === "1") return { state: "running", detail: `started ${f.started ?? "?"}` };
   if (f.exit) {
     if (f.exit === "0") return { state: "completed", detail: `exit 0, finished ${f.finished ?? "?"}` };
     if (f.killed === "cancelled") return { state: "cancelled", detail: `cancelled (exit ${f.exit})` };
     if (f.killed === "walltime") return { state: "failed", detail: `walltime exceeded (exit ${f.exit})` };
     return { state: "failed", detail: `exit ${f.exit}` };
   }
-  if (f.alive === "1") return { state: "running", detail: `started ${f.started ?? "?"}` };
   return { state: "lost", detail: "no exit code and the runner is gone (machine rebooted or process killed?)" };
 }
 
@@ -313,23 +377,30 @@ export function parseRejection(text: string): string | undefined {
   return m?.[1]?.trim();
 }
 
-const SQUEUE_STATE: Record<string, JobState> = {
-  PENDING: "submitted", CONFIGURING: "submitted", REQUEUED: "submitted", REQUEUE_HOLD: "submitted", RESIZING: "submitted", SUSPENDED: "submitted",
+const SLURM_STATE: Record<string, JobState> = {
+  PENDING: "submitted", CONFIGURING: "submitted", REQUEUED: "submitted", REQUEUE_HOLD: "submitted", REQUEUE_FED: "submitted", RESIZING: "submitted", SUSPENDED: "submitted",
   RUNNING: "running", COMPLETING: "running", STAGE_OUT: "running", SIGNALING: "running",
+  COMPLETED: "completed", CANCELLED: "cancelled",
+  FAILED: "failed", TIMEOUT: "failed", NODE_FAIL: "failed", PREEMPTED: "failed", BOOT_FAIL: "failed", DEADLINE: "failed", OUT_OF_MEMORY: "failed",
 };
+const slurmState = (s: string): JobState | "unknown" => SLURM_STATE[s.split(" ")[0] ?? ""] ?? "unknown";
 
-export function parseSlurmStatus(f: Record<string, string>): { state: JobState; detail: string } {
-  if (f.squeue) return { state: SQUEUE_STATE[f.squeue] ?? "running", detail: `squeue: ${f.squeue}` };
+/**
+ * squeue first (live), then sacct (history), then the exit file the batch script writes. A scheduler error is
+ * "unknown" (keep the last state), never "lost": squeue failing is not evidence the job is gone.
+ */
+export function parseSlurmStatus(f: Record<string, string>): { state: JobState | "unknown"; detail: string } {
+  if (f.squeue_rc === "0" && f.squeue) return { state: slurmState(f.squeue), detail: `squeue: ${f.squeue}` };
+  if (f.squeue_rc !== "0" && !/invalid job id/i.test(f.squeue ?? "")) return { state: "unknown", detail: `squeue failed: ${f.squeue ?? ""}`.trim() };
+  // Not in the queue any more: ask the accounting history.
   const [state = "", exitCode = ""] = (f.sacct ?? "").split("|");
-  const base = state.split(" ")[0] ?? "";
-  if (base === "COMPLETED") return { state: "completed", detail: `sacct: COMPLETED ${exitCode}`.trim() };
-  if (base === "CANCELLED") return { state: "cancelled", detail: `sacct: ${state}` };
-  if (base === "PENDING") return { state: "submitted", detail: "sacct: PENDING" };
-  if (base === "RUNNING") return { state: "running", detail: "sacct: RUNNING" };
-  if (base) return { state: "failed", detail: `sacct: ${state} ${exitCode}`.trim() };
-  // Not in squeue or sacct (accounting off or lagging): fall back to the exit file the batch script writes.
+  if (f.sacct_rc === "0" && state) {
+    const st = slurmState(state);
+    return { state: st, detail: `sacct: ${state} ${exitCode}`.trim() };
+  }
   if (f.exit === "0") return { state: "completed", detail: "exit 0 (from .cairn/exit)" };
   if (f.exit) return { state: "failed", detail: `exit ${f.exit} (from .cairn/exit)` };
+  if (f.sacct_rc !== "0") return { state: "unknown", detail: `sacct failed: ${f.sacct ?? ""}`.trim() };
   return { state: "lost", detail: "not in squeue or sacct, and no exit file" };
 }
 
@@ -364,13 +435,26 @@ export class SlurmRunner implements Runner {
     must(/^\d+$/.test(remoteId), "Slurm job id", remoteId);
     const script = [
       `J=${shq(remoteId)}`,
-      "S=$(squeue -h -j \"$J\" -o '%T' 2>/dev/null | head -n 1)",
-      'echo "squeue=$S"',
-      'if [ -z "$S" ]; then echo "sacct=$(sacct -n -X -P -j "$J" -o State,ExitCode 2>/dev/null | head -n 1)"; fi',
+      "S=$(squeue -h -j \"$J\" -o '%T' 2>&1); RC=$?",
+      'echo "squeue_rc=$RC"; echo "squeue=$(printf \'%s\\n\' "$S" | head -n 1)"',
+      'if [ "$RC" != 0 ] || [ -z "$S" ]; then A=$(sacct -n -X -P -j "$J" -o State,ExitCode 2>&1); echo "sacct_rc=$?"; echo "sacct=$(printf \'%s\\n\' "$A" | head -n 1)"; fi',
       `echo "exit=$(cat ${shq(`${job.dir}/.cairn/exit`)} 2>/dev/null)"`,
     ].join("\n");
     const r = checked(this.transport, await this.transport.run(`${script}\n`), "status");
     return { ...parseSlurmStatus(kv(r.out)), raw: raw(r) };
+  }
+
+  async find(job: RemoteJob): Promise<{ id: string; raw: string } | undefined> {
+    must(ID_RE.test(job.id), "job id", job.id);
+    const name = `cairn-${job.id}`;
+    const script = [
+      `echo "q=$(squeue -h -n ${name} -o '%i' 2>/dev/null | head -n 1)"`,
+      `echo "a=$(sacct -n -X -P --name=${name} -S now-30days -o JobID 2>/dev/null | head -n 1)"`,
+    ].join("\n");
+    const r = checked(this.transport, await this.transport.run(`${script}\n`), "find");
+    const f = kv(r.out);
+    const id = [f.q, f.a].find((x) => x && /^\d+$/.test(x));
+    return id ? { id, raw: raw(r) } : undefined;
   }
 
   async cancel(_job: RemoteJob, remoteId: string): Promise<{ raw: string }> {
@@ -379,8 +463,7 @@ export class SlurmRunner implements Runner {
   }
 
   async fetch(job: RemoteJob): Promise<FetchResult> {
-    const r = checked(this.transport, await this.transport.run(fetchScript(job.dir, job.manifest.outputs), { timeoutMs: 600_000 }), "fetch");
-    return parseFetch(job.dir, r.out, `exit ${r.code} (${r.ms} ms, ${r.out.length} bytes)\n--- stderr\n${r.err}`);
+    return fetchOutputs(this.transport, job);
   }
 }
 

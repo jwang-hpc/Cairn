@@ -37,7 +37,7 @@ export const walltimeSeconds = (w: string): number => {
 };
 
 const FILE_RE = new RegExp(JOB_FILE_PATTERN);
-const isText = (b: Buffer) => !b.subarray(0, 8192).includes(0);
+const hasNul = (b: Buffer) => b.includes(0);
 
 export function lintJob({ target, machine, files }: LintInput): LintOutcome {
   const errors: string[] = [];
@@ -113,14 +113,15 @@ export function lintJob({ target, machine, files }: LintInput): LintOutcome {
   const byPath = new Map(files.map((f) => [f.path, f]));
   const script = byPath.get(manifest.script);
   if (!script) errors.push(`script ${manifest.script} is not in the experiment directory`);
-  else if (!isText(script.content)) errors.push(`script ${manifest.script} is not a text file`);
+  else if (hasNul(script.content)) errors.push(`script ${manifest.script} is not a text file (contains NUL bytes)`);
   if (new Set(manifest.outputs).size !== manifest.outputs.length) errors.push("outputs lists a file twice");
 
   // Credential locations, in any language: fetched outputs end up in the ledger and in model context.
   const roots = [...(machine.paths?.allowed_prefixes ?? []), ...(machine.scratch ? [machine.scratch] : [])];
   for (const f of files) {
-    if (!isText(f.content)) continue;
-    const text = f.content.toString("utf8");
+    // NUL bytes don't stop bash from running a file; never let them hide one from review.
+    if (hasNul(f.content)) warnings.push(`${f.path}: binary or contains NUL bytes; it is not shown on the card, so check it before approving`);
+    const text = f.content.toString("utf8").replace(/\0/g, "");
     text.split("\n").forEach((line, i) => {
       const m = SECRETS.exec(line);
       if (m) errors.push(`${f.path}:${i + 1}: references '${m[0]}', a credential location; jobs must not read credentials`);
@@ -206,6 +207,7 @@ const INSTALLERS: Record<string, string[]> = {
   pip: ["install", "download"], pip3: ["install", "download"], conda: ["install", "create", "update"], mamba: ["install", "create", "update"],
   apt: ["install"], "apt-get": ["install"], yum: ["install"], dnf: ["install"], npm: ["install", "i", "ci"], pnpm: ["install", "add"], yarn: ["add", "install"],
 };
+const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
 const INTERPRETERS = new Set(["sh", "bash", "zsh", "dash", "ksh", "python", "python3", "perl", "ruby", "node"]);
 const DESTRUCTIVE = new Set(["rm", "rmdir", "mv", "shred", "truncate", "chmod", "chown", "chgrp", "unlink", "ln", "cp", "dd", "find"]);
 const WRAPPERS = new Set(["time", "exec", "command", "builtin", "nice", "ionice", "stdbuf", "env"]);
@@ -223,6 +225,8 @@ const isHome = (w: string) => w === "~" || w.startsWith("~/") || /^\$\{?HOME\}?(
 
 interface Cmd {
   words: string[];
+  /** Heredoc delimiters this command reads. */
+  heredocs: string[];
   /** Write redirections (> file, >> file). */
   writes: string[];
   piped: boolean;
@@ -230,17 +234,16 @@ interface Cmd {
 }
 
 /** Split one logical line into simple commands. Quote-aware; good enough for a guard, not a shell. */
-function lexLine(line: string): { cmds: Cmd[]; heredocs: string[] } {
+function lexLine(line: string): { cmds: Cmd[] } {
   const cmds: Cmd[] = [];
-  const heredocs: string[] = [];
-  let cur: Cmd = { words: [], writes: [], piped: false, background: false };
+  let cur: Cmd = { words: [], heredocs: [], writes: [], piped: false, background: false };
   let word = "";
   let inWord = false;
   let pending: "write" | "heredoc" | "read" | null = null;
   const endWord = () => {
     if (!inWord) return;
     if (pending === "write") cur.writes.push(word);
-    else if (pending === "heredoc") heredocs.push(word.replace(/^-/, ""));
+    else if (pending === "heredoc") cur.heredocs.push(word.replace(/^-/, ""));
     else if (pending !== "read") cur.words.push(word);
     pending = null;
     word = "";
@@ -249,8 +252,8 @@ function lexLine(line: string): { cmds: Cmd[]; heredocs: string[] } {
   const endCmd = (next: { piped?: boolean; background?: boolean } = {}) => {
     endWord();
     if (next.background) cur.background = true;
-    if (cur.words.length > 0 || cur.writes.length > 0) cmds.push(cur);
-    cur = { words: [], writes: [], piped: next.piped === true, background: false };
+    if (cur.words.length > 0 || cur.writes.length > 0 || cur.heredocs.length > 0) cmds.push(cur);
+    cur = { words: [], heredocs: [], writes: [], piped: next.piped === true, background: false };
   };
   for (let i = 0; i < line.length; i++) {
     const c = line[i]!;
@@ -310,7 +313,7 @@ function lexLine(line: string): { cmds: Cmd[]; heredocs: string[] } {
     }
   }
   endCmd();
-  return { cmds, heredocs };
+  return { cmds };
 }
 
 /** Remove a comment: '#' at the start of a word, outside quotes. */
@@ -373,7 +376,7 @@ function scanShell(file: string, text: string, ctx: { target: string; roots: str
     }
     let line = stripComment(lines[i]!);
     while (line.trimEnd().endsWith("\\") && i + 1 < lines.length) line = line.trimEnd().slice(0, -1) + " " + stripComment(lines[++i]!);
-    const { cmds, heredocs } = lexLine(line);
+    const { cmds } = lexLine(line);
     for (const cmd of cmds) {
       for (const w of cmd.writes) checkPath(n, w, true);
       const c = commandName(cmd.words);
@@ -407,10 +410,14 @@ function scanShell(file: string, text: string, ctx: { target: string; roots: str
         }
       }
     }
-    // Skip heredoc bodies: they are data, not commands.
-    for (const delim of heredocs) {
-      while (i + 1 < lines.length && lines[i + 1]!.trim() !== delim) i++;
-      i++;
+    // Heredoc bodies are data — unless a shell reads them (bash <<EOF), then they are commands and get scanned.
+    const heredocs = cmds.flatMap((c) => c.heredocs);
+    const bodyIsShell = cmds.some((c) => c.heredocs.length > 0 && SHELLS.has(commandName(c.words)?.name ?? ""));
+    if (!bodyIsShell) {
+      for (const delim of heredocs) {
+        while (i + 1 < lines.length && lines[i + 1]!.trim() !== delim) i++;
+        i++;
+      }
     }
   }
 }

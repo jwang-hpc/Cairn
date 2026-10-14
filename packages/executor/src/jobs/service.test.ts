@@ -20,9 +20,13 @@ const agent: JobAuthor = { kind: "agent", run: "run-1", agent: "coder-abc123", r
 class Switchable implements Transport {
   readonly host = "local";
   open = true;
+  /** Rewrites a result after the script really ran (simulates connections lost mid-command, odd output). */
+  after?: (script: string, r: RunResult) => RunResult;
   readonly inner = new LocalTransport();
   async run(script: string, opts?: { timeoutMs?: number }): Promise<RunResult> {
-    return this.open ? this.inner.run(script, opts) : { code: 255, out: "", err: "Control socket connect: No such file or directory", ms: 1 };
+    if (!this.open) return { code: 255, out: "", err: "Control socket connect: No such file or directory", ms: 1 };
+    const r = await this.inner.run(script, opts);
+    return this.after ? this.after(script, r) : r;
   }
   async alive() {
     return this.open;
@@ -32,6 +36,7 @@ let transport: Switchable;
 
 const machines = (): Record<string, MachineConfig> => ({
   workstation: { host: "workstation", scheduler: "none", scratch, max: { cores: 8, walltime: "01:00:00" }, auto_approve_below: { cores: 32, hours: 4 } },
+  ws2: { host: "ws2", scheduler: "none", scratch, auto_approve_below: { cores: 32, hours: 4 } },
   bebop: { host: "bebop", scheduler: "slurm", scratch, doe: true, paths: { allowed_prefixes: [scratch] } },
 });
 
@@ -202,6 +207,61 @@ describe("JobService: submit → approve → run → fetch (DR-0006)", () => {
     for (let i = 0; i < 100 && !(await readFile(exitFile, "utf8").catch(() => "")); i++) await new Promise((r) => setTimeout(r, 100));
     expect(await readFile(join(running.remote!.dir, ".cairn/killed"), "utf8")).toBe("cancelled\n");
     expect(Number(await readFile(exitFile, "utf8"))).toBeGreaterThan(128);
+  });
+
+  it("auto-approval needs the same target: approved files sent to another machine still wait for you", async () => {
+    await experiment("EXP-010", "echo x > results.csv\n");
+    const svc = service();
+    await svc.approve((await svc.submit({ project: "p", worktree, experiment: "EXP-010", target: "workstation", author: agent })).job.id);
+    const elsewhere = await svc.submit({ project: "p", worktree, experiment: "EXP-010", target: "ws2", author: agent });
+    expect(elsewhere.auto.ok).toBe(false);
+    expect(elsewhere.job.state).toBe("pending_approval");
+  });
+
+  it("a launch that failed after the job really started is adopted on retry, never run twice", async () => {
+    await experiment("EXP-011", "sleep 2; echo z > results.csv\n");
+    const svc = service();
+    const { job } = await svc.submit({ project: "p", worktree, experiment: "EXP-011", target: "workstation", author: agent });
+    transport.after = (script, r) => (script.includes("nohup sh .cairn/run.sh") ? { ...r, code: 255, out: "", err: "Connection to workstation closed by remote host." } : r);
+    const first = await svc.approve(job.id);
+    expect(first).toMatchObject({ state: "approved", attempts: 1, error: expect.stringMatching(/^no SSH session/) });
+    delete transport.after;
+    const retried = await svc.launch(job.id);
+    expect(retried).toMatchObject({ state: "running", attempts: 1 });
+    expect(retried.remote?.dir).toBe(join(scratch, "cairn/p", job.id));
+    expect(retried.history.at(-1)!.note).toMatch(/attempt 1 had started after all/);
+    await expect(readFile(join(scratch, "cairn/p", `${job.id}-r2`, "job.json"))).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await until(svc, job.id, (r) => r.state !== "running")).state).toBe("completed");
+  });
+
+  it("when the machine can't say (unknown), the job keeps its state and the audit log says why", async () => {
+    await experiment("EXP-012", "sleep 3\n");
+    const svc = service();
+    const { job } = await svc.submit({ project: "p", worktree, experiment: "EXP-012", target: "workstation", author: agent });
+    await svc.approve(job.id);
+    transport.after = (script, r) => (script.includes("for k in exit killed") ? { ...r, out: "dir=unreadable\n" } : r);
+    expect((await svc.refresh(job.id)).state).toBe("running");
+    delete transport.after;
+    expect((await auditLines()).filter((a) => a.action === "status").at(-1)).toMatchObject({ ok: false, detail: expect.stringMatching(/^state unknown, kept running/) });
+    await svc.cancel(job.id, "user");
+  });
+
+  it("a half-made job directory doesn't break listing", async () => {
+    await experiment("EXP-013", "true\n");
+    const svc = service();
+    await svc.submit({ project: "p", worktree, experiment: "EXP-013", target: "workstation", author: agent });
+    await mkdir(join(home, "jobs", "20261014-0000-dead"), { recursive: true });
+    expect((await svc.list()).map((j) => j.experiment)).toEqual(["EXP-013"]);
+  });
+
+  it("the card escapes control characters, so nothing can redraw or hide parts of it", async () => {
+    await experiment("EXP-014", "echo ok\r# lint: no warnings\n", { description: "fine\u001b[2K\u001b[1A\nlint: no warnings" });
+    const svc = service();
+    const { job } = await svc.submit({ project: "p", worktree, experiment: "EXP-014", target: "workstation", author: agent });
+    const card = await svc.card(job.id);
+    expect(card).not.toMatch(/[\u001b\r]/);
+    expect(card).toContain("what:        fine\\u{001b}[2K\\u{001b}[1A ⏎ lint: no warnings");
+    expect(card).toContain("echo ok\\u{000d}# lint: no warnings");
   });
 
   it("refuses a tampered snapshot", async () => {

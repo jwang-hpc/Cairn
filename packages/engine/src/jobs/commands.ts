@@ -1,6 +1,6 @@
 // `re job list | show | approve | deny | submit | status | cancel | fetch` and `re machine list`: the human side of
 // the executor (DR-0006). Agents propose jobs; only these commands (and later the app) approve them.
-import { JobError, type JobService, type JobServiceOptions, SshTransport } from "@cairn/executor";
+import { JobError, type JobService, type JobServiceOptions, printable, SshTransport } from "@cairn/executor";
 import type { JobRecord } from "@cairn/shared";
 import { join } from "node:path";
 import type { Engine } from "../engine.js";
@@ -35,7 +35,8 @@ interface Io {
 const who = (j: JobRecord) => (j.author.kind === "agent" ? `agent ${j.author.agent} (${j.author.model})` : "you");
 const when = (iso: string) => iso.replace("T", " ").slice(0, 16);
 
-function outcome(j: JobRecord, io: Io): number {
+function outcome(j: JobRecord, io0: Io): number {
+  const io = safe(io0);
   if (j.state === "running" || j.state === "submitted") {
     io.out(`started on ${j.target}: ${j.remote?.id} in ${j.remote?.dir}`);
     io.out(`follow with: re job status ${j.id}`);
@@ -50,6 +51,9 @@ function outcome(j: JobRecord, io: Io): number {
   io.out(`${j.id}: ${j.state}`);
   return 0;
 }
+
+/** Remote output and agent text reach these lines: escape control characters before they reach the terminal. */
+const safe = (io: Io): Io => ({ out: (l) => io.out(printable(l)), err: (l) => io.err(printable(l)) });
 
 function statusLines(j: JobRecord): string[] {
   const last = j.history.at(-1);
@@ -128,7 +132,7 @@ export async function runJobCommand(
       case "submit":
         return outcome(await jobs.launch(needId()), io);
       case "status":
-        for (const l of statusLines(await jobs.refresh(needId()))) io.out(l);
+        for (const l of statusLines(await jobs.refresh(needId()))) io.out(printable(l));
         return 0;
       case "cancel": {
         const j = await jobs.cancel(needId(), "user");
@@ -139,7 +143,7 @@ export async function runJobCommand(
         const j = await jobs.fetch(needId());
         const r = j.results!;
         io.out(`fetched ${r.files.length} file${r.files.length === 1 ? "" : "s"} into ${j.project}/${r.dir}/ (committed to the ledger)`);
-        for (const l of statusLines(j).slice(1)) io.out(l);
+        for (const l of statusLines(j).slice(1)) io.out(printable(l));
         return 0;
       }
       default:
@@ -148,7 +152,7 @@ export async function runJobCommand(
     }
   } catch (e) {
     if (e instanceof JobError || e instanceof LedgerError) {
-      io.err(`re ${command}: ${e.message}`);
+      io.err(`re ${command}: ${printable(e.message, true)}`);
       return 1;
     }
     throw e;

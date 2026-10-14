@@ -2,7 +2,8 @@
 // not the agent's worktree, is what gets submitted, so the files can't change between approval and launch.
 // State changes from different processes (an agent's executor session, `re job approve` in a terminal) are
 // serialized by a lock file.
-import { createHash } from "node:crypto";
+import { constants } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
 import { lstat, mkdir, open, readdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, relative, sep } from "node:path";
 import { EXPERIMENT_PATTERN, JOB_ID_PATTERN, type JobFile, type JobRecord } from "@cairn/shared";
@@ -15,7 +16,8 @@ export class JobError extends Error {
   }
 }
 
-const EXP_RE = new RegExp(EXPERIMENT_PATTERN);
+export const EXPERIMENT_RE = new RegExp(EXPERIMENT_PATTERN);
+const EXP_RE = EXPERIMENT_RE;
 const ID_RE = new RegExp(JOB_ID_PATTERN);
 const sha256 = (b: Buffer | string) => createHash("sha256").update(b).digest("hex");
 
@@ -28,8 +30,11 @@ export const describeFiles = (files: JobFileContent[]): JobFile[] =>
   [...files].sort((a, b) => a.path.localeCompare(b.path)).map((f) => ({ path: f.path, bytes: f.content.length, sha256: sha256(f.content) }));
 
 /**
- * Read <worktree>/experiments/<experiment>/ without following symlinks (DR-0006 step 2: the executor resolves the
- * name inside that worktree). Reading stops early past twice the lint limits, so a huge directory can't be loaded.
+ * Read <worktree>/experiments/<experiment>/ on the host without following symlinks (user submissions and tests).
+ * Agent submissions read inside the agent's sandbox instead (SubmitRequest.read): a worktree the agent can change
+ * while we read is a race on the host, but harmless where only the worktree is mounted. Here every file is opened
+ * O_NOFOLLOW and must be the same inode lstat saw, which closes the simple swaps. Reading stops early past twice
+ * the lint limits, so a huge directory can't be loaded.
  */
 export async function snapshotExperiment(worktree: string, experiment: string): Promise<JobFileContent[]> {
   if (!EXP_RE.test(experiment)) throw new JobError(`experiment must be a name like EXP-001, not ${JSON.stringify(experiment)}`);
@@ -52,12 +57,28 @@ export async function snapshotExperiment(worktree: string, experiment: string): 
       else if (s.isFile()) {
         total += s.size;
         if (files.length >= LIMITS.files * 2 || total > LIMITS.totalBytes * 2) throw new JobError(`experiments/${experiment}/ is too large for a job (limits: ${LIMITS.files} files, ${LIMITS.totalBytes} bytes)`);
-        files.push({ path: rel, content: await readFile(p) });
+        files.push({ path: rel, content: await readNoFollow(p, s, `experiments/${experiment}/${rel}`) });
       } else throw new JobError(`experiments/${experiment}/${rel} is not a regular file`);
     }
   };
   await walk(dir);
   return files;
+}
+
+async function readNoFollow(p: string, seen: { dev: number; ino: number }, label: string): Promise<Buffer> {
+  let h;
+  try {
+    h = await open(p, constants.O_RDONLY | constants.O_NOFOLLOW);
+  } catch (e) {
+    throw new JobError(`${label} changed while it was read (${(e as NodeJS.ErrnoException).code}); job files must be regular files`);
+  }
+  try {
+    const st = await h.stat();
+    if (!st.isFile() || st.dev !== seen.dev || st.ino !== seen.ino) throw new JobError(`${label} changed while it was read; job files must be regular files`);
+    return await h.readFile();
+  } finally {
+    await h.close();
+  }
 }
 
 export class JobStore {
@@ -71,16 +92,24 @@ export class JobStore {
     return join(this.root, id);
   }
 
+  /** Built in a temporary directory and renamed into place, so readers never see a half-made job. */
   async create(record: JobRecord, files: JobFileContent[]): Promise<void> {
     const dir = this.#dir(record.id);
+    const tmp = join(this.root, `.tmp-${record.id}-${randomBytes(4).toString("hex")}`);
     await mkdir(this.root, { recursive: true, mode: 0o700 });
-    await mkdir(dir, { mode: 0o700 });
-    for (const f of files) {
-      const p = join(dir, "files", f.path);
-      await mkdir(dirname(p), { recursive: true, mode: 0o700 });
-      await writeFile(p, f.content, { mode: 0o600 });
+    await mkdir(tmp, { mode: 0o700 });
+    try {
+      for (const f of files) {
+        const p = join(tmp, "files", f.path);
+        await mkdir(dirname(p), { recursive: true, mode: 0o700 });
+        await writeFile(p, f.content, { mode: 0o600 });
+      }
+      await writeFile(join(tmp, "job.json"), `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
+      await rename(tmp, dir);
+    } catch (e) {
+      await rm(tmp, { recursive: true, force: true });
+      throw e;
     }
-    await this.#write(record);
   }
 
   async get(id: string): Promise<JobRecord> {
@@ -89,9 +118,11 @@ export class JobStore {
     return JSON.parse(text) as JobRecord;
   }
 
+  /** Every complete job; anything unreadable is skipped rather than failing the whole list. */
   async list(): Promise<JobRecord[]> {
     const ids = (await readdir(this.root).catch(() => [] as string[])).filter((x) => ID_RE.test(x)).sort();
-    return Promise.all(ids.map((id) => this.get(id)));
+    const jobs = await Promise.all(ids.map((id) => this.get(id).catch(() => undefined)));
+    return jobs.filter((j): j is JobRecord => j !== undefined);
   }
 
   /** The approved snapshot; refuses if it no longer matches the record (tampered or damaged). */

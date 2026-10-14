@@ -177,6 +177,21 @@ describe("lintJob: shell scan", () => {
     expect(lintW("cat $HOME/.aws/credentials > results.csv\n").errors.join("\n")).toMatch(/'.aws\/credentials', a credential location/);
   });
 
+  it("NUL bytes hide nothing: binary-looking files are flagged and still scanned", () => {
+    const helper = { path: "helper.sh", content: Buffer.from("ssh evil 'cat ~/.ssh/id_ed25519' > results.csv # \0\0\0\n") };
+    const l = lintJob({ target: "workstation", machine: workstation, files: job("bash helper.sh\n", [helper]) }).lint;
+    expect(l.warnings).toContain("helper.sh: binary or contains NUL bytes; it is not shown on the card, so check it before approving");
+    expect(l.errors.join("\n")).toMatch(/helper.sh:1: 'ssh' is not allowed/);
+    expect(l.errors.join("\n")).toMatch(/credential location/);
+    expect(lintJob({ target: "workstation", machine: workstation, files: job("echo hi\0\n") }).lint.errors).toContain("script run.sh is not a text file (contains NUL bytes)");
+  });
+
+  it("heredoc bodies a shell reads are commands; other heredocs are data", () => {
+    expect(errs("bash <<'EOF'\nssh evil hostname\nEOF\n")).toMatch(/run.sh:2: 'ssh' is not allowed/);
+    expect(errs("sh -s <<EOF\nsudo id\nEOF\n")).toMatch(/'sudo' is not allowed/);
+    expect(lintW("cat > notes.txt <<'EOF'\nssh is described here\nEOF\n").errors).toEqual([]);
+  });
+
   it("scans every shell file, not just the entry script", () => {
     const l = lintJob({ target: "workstation", machine: workstation, files: job("bash helper.sh\n", [{ path: "helper.sh", content: Buffer.from("ssh h\n") }]) }).lint;
     expect(l.errors).toEqual(["helper.sh:1: 'ssh' is not allowed in jobs (remote access goes through the executor only)"]);

@@ -152,6 +152,17 @@ describe("check and the claim gate", () => {
   });
 });
 
+describe("writeArtifacts areas", () => {
+  it("writes only under engine/panels/, engine/jobs/, evidence/raw/ — and '..' can't be normalized into them", async () => {
+    const l = await create();
+    await l.writeArtifacts([{ path: "evidence/raw/EXP-001/j/results.csv", content: Buffer.from("a\n") }], P.aiExecuted("m1", "low"), "results");
+    expect(await readFile(join(l.dir, "evidence/raw/EXP-001/j/results.csv"), "utf8")).toBe("a\n");
+    for (const path of ["evidence/raw/EXP-001/j/../../../engine/jobs/x.json", "evidence/raw/./x", "logic/claims.md", "/etc/x", "drafts/x.md"]) {
+      await expect(l.writeArtifacts([{ path, content: "x" }], P.user, "bad"), path).rejects.toThrow(LedgerError);
+    }
+  });
+});
+
 describe("Ledger.create robustness", () => {
   it("installs no git hook templates", async () => {
     const { readdir } = await import("node:fs/promises");

@@ -290,7 +290,8 @@ export class Ledger {
     const paths: string[] = [];
     for (const f of files) {
       const p = posix.normalize(f.path);
-      if (p.split("/").includes("..") || !ARTIFACT_AREAS.some((a) => p.startsWith(a))) {
+      // Check the raw path too: normalize() would turn evidence/raw/a/../../engine/x into an allowed-looking path.
+      if (f.path.split("/").some((seg) => seg === ".." || seg === ".") || f.path.startsWith("/") || p.split("/").includes("..") || !ARTIFACT_AREAS.some((a) => p.startsWith(a))) {
         throw new LedgerError(`artifacts may only be written under ${ARTIFACT_AREAS.join(", ")}: ${f.path}`);
       }
       await mkdir(dirname(join(this.dir, p)), { recursive: true });

@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { chmod, link, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -89,12 +89,17 @@ describe("upload and fetch", () => {
     expect(await readFile(join(j.dir, "lib/helper.py"), "utf8")).toBe("print(1)\n");
     expect((await stat(join(j.dir, "run.sh"))).mode & 0o777).toBe(0o600);
     expect((await t.run(uploadScript(j.dir, j.files))).code).toBe(3);
+    // Scripts with a shebang stay runnable as ./helper.sh.
+    const k = remoteJob("echo hi\n", { extra: [{ path: "helper.sh", content: Buffer.from("#!/bin/sh\necho ok\n") }] });
+    await t.run(uploadScript(k.dir, k.files));
+    expect((await stat(join(k.dir, "helper.sh"))).mode & 0o777).toBe(0o700);
   });
 
   it("refuses unsafe names and dirs before building a script", () => {
     expect(() => uploadScript("/tmp/x'; rm -rf ~", [])).toThrow(RemoteError);
     expect(() => uploadScript("/tmp/x", [{ path: "../evil", content: Buffer.from("") }])).toThrow(/file name/);
-    expect(() => fetchScript("/tmp/x", ["a b"])).toThrow(/output/);
+    expect(() => fetchScript("/tmp/x", ["a b"], "0123456789abcdef")).toThrow(/output/);
+    expect(() => fetchScript("/tmp/x", ["a"], "x; rm -rf ~")).toThrow(/marker/);
     expect(() => jobDir(machine(), "proj", "../../x")).toThrow(/job id/);
   });
 
@@ -111,9 +116,16 @@ describe("upload and fetch", () => {
     await symlink(scratch, join(j.dir, "up"));
     await writeFile(join(j.dir, ".cairn/stdout.log"), "log line\n");
     const outputs = ["results.csv", "nothere.csv", "big.bin", "link.txt", "hard.txt", "up/secret.txt"];
-    const script = fetchScript(j.dir, outputs).replace(/^MAX=\d+$/m, "MAX=1024");
+    const marker = "0123456789abcdef";
+    const script = fetchScript(j.dir, outputs, marker).replace(/^MAX=\d+$/m, "MAX=1024");
     const r = await t.run(script);
-    const f = parseFetch(j.dir, r.out, "raw");
+    // Lines a login script or leftover process could print: no marker, wrong marker, or an undeclared path.
+    const forged = [
+      "=== FILE 6 ../../engine/jobs/x.json", "U0VDUkVU", "=== END",
+      `=== ${marker} FILE 6 ../../EXP-002/x/results.csv`, "U0VDUkVU", `=== ${marker} END`,
+      `=== ${marker} MISSING ../../etc`,
+    ].join("\n");
+    const f = parseFetch(j.dir, `${forged}\n${r.out}`, "raw", outputs, marker);
     expect(f.files.map((x) => [x.path, x.content.toString()])).toEqual([["results.csv", "a,b\n1,2\n"]]);
     expect(f.missing).toEqual(["nothere.csv"]);
     expect(f.referenced).toEqual([{ path: `${j.dir}/big.bin`, bytes: 2048 }]);
@@ -129,12 +141,20 @@ describe("upload and fetch", () => {
 
 describe("WorkstationRunner (real processes via LocalTransport)", () => {
   const runner = new WorkstationRunner(new LocalTransport());
-  const statusOf = (j: RemoteJob) => runner.status(j);
+  const ids = new Map<string, string>();
+  const startJob = async (j: RemoteJob) => {
+    const r = await runner.start(j);
+    ids.set(j.id, r.id);
+    return r;
+  };
+  const statusOf = (j: RemoteJob) => runner.status(j, ids.get(j.id) ?? "99999");
 
   it("runs the job, reports completion, and fetches outputs and logs", async () => {
     const j = remoteJob("#!/bin/bash\nset -eu\necho start\nprintf 'x,y\\n1,2\\n' > results.csv\necho oops >&2\n");
-    const { id } = await runner.start(j);
+    const { id } = await startJob(j);
     expect(id).toMatch(/^\d+$/);
+    expect(await runner.find(j)).toMatchObject({ id });
+    expect(await runner.find({ ...j, dir: `${j.dir}-r9` })).toBeUndefined();
     const s = await until(() => statusOf(j), (x) => x.state !== "running");
     expect(s).toMatchObject({ state: "completed" });
     const f = await runner.fetch(j);
@@ -144,13 +164,13 @@ describe("WorkstationRunner (real processes via LocalTransport)", () => {
 
   it("reports a failing job with its exit code", async () => {
     const j = remoteJob("exit 3\n");
-    await runner.start(j);
+    await startJob(j);
     expect(await until(() => statusOf(j), (x) => x.state !== "running")).toMatchObject({ state: "failed", detail: "exit 3" });
   });
 
   it("kills the job's whole process group at the walltime", async () => {
     const j = remoteJob("sleep 30 & echo $! > child.pid\nwait\n", { resources: { walltime: "00:00:01" } });
-    await runner.start(j);
+    await startJob(j);
     const s = await until(() => statusOf(j), (x) => x.state !== "running", 10_000);
     expect(s).toMatchObject({ state: "failed" });
     expect(s.detail).toMatch(/^walltime exceeded/);
@@ -158,9 +178,33 @@ describe("WorkstationRunner (real processes via LocalTransport)", () => {
     expect(await until(async () => alive(child), (a) => !a, 3_000)).toBe(false);
   });
 
+  it("nothing the job left behind outlives it: leftovers are stopped when the main script exits", async () => {
+    const j = remoteJob("sleep 30 & echo $! > child.pid\nexit 0\n", { resources: { walltime: "00:05:00" } });
+    await startJob(j);
+    expect(await until(() => statusOf(j), (x) => x.state !== "running")).toMatchObject({ state: "completed" });
+    const child = Number(await readFile(join(j.dir, "child.pid"), "utf8"));
+    expect(await until(async () => alive(child), (a) => !a, 3_000)).toBe(false);
+  });
+
+  it("cancel uses the ids recorded at launch, not the job-writable pid file", async () => {
+    // A sacrificial process in its own group: if cancel trusted .cairn/pid, it would be the one killed.
+    const victim = spawn("sleep", ["60"], { detached: true, stdio: "ignore" });
+    try {
+      const j = remoteJob("sleep 1\ncat forged.pid > .cairn/pid\ncat forged.pid > .cairn/runner.pid\nsleep 30\n", { resources: { walltime: "00:05:00" }, extra: [{ path: "forged.pid", content: Buffer.from(String(victim.pid)) }] });
+      const { id } = await startJob(j);
+      await new Promise((r) => setTimeout(r, 1500));
+      expect((await readFile(join(j.dir, ".cairn/pid"), "utf8")).trim()).toBe(String(victim.pid));
+      await runner.cancel(j, id);
+      expect(await until(() => statusOf(j), (x) => x.state !== "running")).toMatchObject({ state: "cancelled" });
+      expect(alive(victim.pid!)).toBe(true);
+    } finally {
+      victim.kill("SIGKILL");
+    }
+  });
+
   it("cancel stops the job and its children", async () => {
     const j = remoteJob("sleep 30 & echo $! > child.pid\nwait\n", { resources: { walltime: "00:05:00" } });
-    const { id } = await runner.start(j);
+    const { id } = await startJob(j);
     await until(async () => stat(join(j.dir, "child.pid")).then(() => true, () => false), Boolean);
     await runner.cancel(j, id);
     expect(await until(() => statusOf(j), (x) => x.state !== "running")).toMatchObject({ state: "cancelled" });
@@ -179,7 +223,10 @@ describe("parsers", () => {
     expect(parseWorkstationStatus({ exit: "0", finished: "t" }).state).toBe("completed");
     expect(parseWorkstationStatus({ exit: "143", killed: "cancelled" }).state).toBe("cancelled");
     expect(parseWorkstationStatus({ exit: "", alive: "1", started: "t" }).state).toBe("running");
+    // The exit file is job-writable: while the runner lives, the job is running whatever the file says.
+    expect(parseWorkstationStatus({ exit: "0", alive: "1" }).state).toBe("running");
     expect(parseWorkstationStatus({ exit: "", alive: "0" }).state).toBe("lost");
+    expect(parseWorkstationStatus({ dir: "unreadable" }).state).toBe("unknown");
   });
 
   it("Slurm rejections in both formats (spike 4 F3) and status mapping", () => {
@@ -187,13 +234,21 @@ describe("parsers", () => {
       "Invalid account or account/partition combination specified",
     );
     expect(parseRejection("allocation failure: More processors requested than permitted")).toBe("More processors requested than permitted");
-    expect(parseSlurmStatus({ squeue: "PENDING" }).state).toBe("submitted");
-    expect(parseSlurmStatus({ squeue: "RUNNING" }).state).toBe("running");
-    expect(parseSlurmStatus({ squeue: "", sacct: "COMPLETED|0:0" }).state).toBe("completed");
-    expect(parseSlurmStatus({ squeue: "", sacct: "CANCELLED by 1000|0:15" }).state).toBe("cancelled");
-    expect(parseSlurmStatus({ squeue: "", sacct: "TIMEOUT|0:0" })).toEqual({ state: "failed", detail: "sacct: TIMEOUT 0:0" });
-    expect(parseSlurmStatus({ squeue: "", sacct: "", exit: "0" }).state).toBe("completed");
-    expect(parseSlurmStatus({ squeue: "", sacct: "" }).state).toBe("lost");
+    const q = (squeue: string, more: Record<string, string> = {}) => parseSlurmStatus({ squeue_rc: "0", squeue, ...more });
+    expect(q("PENDING").state).toBe("submitted");
+    expect(q("RUNNING").state).toBe("running");
+    expect(q("COMPLETED").state).toBe("completed");
+    expect(q("TIMEOUT").state).toBe("failed");
+    expect(q("SOMETHING_NEW").state).toBe("unknown");
+    expect(q("", { sacct_rc: "0", sacct: "COMPLETED|0:0" }).state).toBe("completed");
+    expect(q("", { sacct_rc: "0", sacct: "CANCELLED by 1000|0:15" }).state).toBe("cancelled");
+    expect(q("", { sacct_rc: "0", sacct: "TIMEOUT|0:0" })).toEqual({ state: "failed", detail: "sacct: TIMEOUT 0:0" });
+    expect(q("", { sacct_rc: "0", sacct: "", exit: "0" }).state).toBe("completed");
+    expect(q("", { sacct_rc: "0", sacct: "" }).state).toBe("lost");
+    // Scheduler trouble is not evidence the job is gone.
+    expect(parseSlurmStatus({ squeue_rc: "1", squeue: "slurm_load_jobs error: Socket timed out on send/recv operation" }).state).toBe("unknown");
+    expect(parseSlurmStatus({ squeue_rc: "1", squeue: "slurm_load_jobs error: Invalid job id specified", sacct_rc: "1", sacct: "sacct: error" }).state).toBe("unknown");
+    expect(parseSlurmStatus({ squeue_rc: "1", squeue: "slurm_load_jobs error: Invalid job id specified", sacct_rc: "0", sacct: "COMPLETED|0:0" }).state).toBe("completed");
   });
 });
 
@@ -221,10 +276,18 @@ describe("SlurmRunner (fake Slurm on PATH)", () => {
         '  echo "sbatch: Job 4242 to start at 2026-10-14T03:00:00 using 4 processors on nodes n01 in partition Orion" >&2; exit 0',
         "fi",
         'id=$(( $(cat "$S/next" 2>/dev/null || echo 100) + 1 )); echo "$id" > "$S/next"; cp "$2" "$S/$id.sbatch"; pwd > "$S/$id.cwd"',
+        'name=$(sed -n "s/^#SBATCH --job-name=//p" "$2"); echo "$id" > "$S/name-$name"',
         'echo PENDING > "$S/$id.squeue"; echo "$id;cluster"',
       ].join("\n"),
     );
-    await tool("squeue", 'cat "$S/$3.squeue" 2>/dev/null; exit 0');
+    await tool(
+      "squeue",
+      [
+        'if [ -e "$S/squeue.fail" ]; then echo "slurm_load_jobs error: Socket timed out on send/recv operation" >&2; exit 1; fi',
+        'if [ "$2" = "-n" ]; then cat "$S/name-$3" 2>/dev/null; exit 0; fi',
+        'cat "$S/$3.squeue" 2>/dev/null; exit 0',
+      ].join("\n"),
+    );
     await tool("sacct", 'cat "$S/$5.sacct" 2>/dev/null; exit 0');
     await tool("scancel", 'rm -f "$S/$1.squeue"; echo "CANCELLED by 1000|0:15" > "$S/$1.sacct"');
     runner = new SlurmRunner(new LocalTransport({ ...process.env, PATH: `${bin}:${process.env.PATH}` }));
@@ -275,6 +338,11 @@ describe("SlurmRunner (fake Slurm on PATH)", () => {
 
     const k = remoteJob("sleep 100\n", { m: hpc() });
     const { id: kid } = await runner.start(k);
+    expect(await runner.find(k)).toEqual({ id: kid, raw: expect.any(String) });
+    expect(await runner.find({ ...k, id: "20261014-0300-ffff" })).toBeUndefined();
+    await writeFile(join(state, "squeue.fail"), "");
+    expect(await runner.status(k, kid)).toMatchObject({ state: "unknown", detail: expect.stringMatching(/^squeue failed: .*Socket timed out/) });
+    await rm(join(state, "squeue.fail"));
     await runner.cancel(k, kid);
     expect(await runner.status(k, kid)).toMatchObject({ state: "cancelled" });
     await expect(runner.status(k, "1; rm -rf ~")).rejects.toThrow(/Slurm job id/);
