@@ -2,6 +2,8 @@
 // background, at most `maxPerProject` at once (the user's choice: 3), the rest queued; its steps stream as events and
 // its outcome comes back to the session's card. A decision is recorded in the ledger (user-revised: the orchestrator
 // drafted it, the user accepted it). Nothing here approves a job or a claim: those gates are unchanged.
+import { open } from "node:fs/promises";
+import { join } from "node:path";
 import { provenance, type EngineEvent } from "@cairn/shared";
 import type { Engine } from "../engine.js";
 import { readUsage } from "../events/log.js";
@@ -64,6 +66,43 @@ export function describeStep(e: EngineEvent): string | undefined {
   return undefined;
 }
 
+const RUN_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const STEPS_TAIL = 8 << 20;
+
+/** A worker's steps in plain words, from the event log (its last 8 MiB): the full log behind an activity card. */
+export async function runSteps(home: string, run: string): Promise<{ at: string; step: string }[]> {
+  if (!RUN_ID.test(run)) return [];
+  let text: string;
+  try {
+    const fh = await open(join(home, "events.jsonl"), "r");
+    try {
+      const { size } = await fh.stat();
+      const start = Math.max(0, size - STEPS_TAIL);
+      const buf = Buffer.alloc(size - start);
+      await fh.read(buf, 0, buf.length, start);
+      text = buf.toString("utf8");
+      if (start > 0) text = text.slice(text.indexOf("\n") + 1);
+    } finally {
+      await fh.close();
+    }
+  } catch {
+    return [];
+  }
+  const out: { at: string; step: string }[] = [];
+  for (const line of text.split("\n")) {
+    if (!line.includes(run)) continue;
+    try {
+      const e = JSON.parse(line) as EngineEvent;
+      if (e.run !== run) continue;
+      const step = describeStep(e);
+      if (step) out.push({ at: e.ts, step });
+    } catch {
+      // a partial line
+    }
+  }
+  return out.slice(-500);
+}
+
 export interface DelegationDeps {
   engine: Engine;
   store: SessionStore;
@@ -71,6 +110,8 @@ export interface DelegationDeps {
   ledgerFor: (project: string) => Promise<Ledger>;
   /** Everything runWorker needs besides the engine (skills dir, jobs, literature, sandbox launcher for tests). */
   worker: Omit<WorkerDeps, "engine" | "observe">;
+  /** More worker deps that are opened lazily, on the first launch (the literature service). */
+  workerExtras?: () => Promise<Partial<Omit<WorkerDeps, "engine" | "observe">>>;
   maxPerProject?: number;
 }
 
@@ -187,10 +228,12 @@ export class Delegations {
         `(Delegated from a research session on project ${r.project} after the researcher launched it. When you finish, write /outbox/report.json; put anything the researcher must decide under "questions".)`,
       ].join("\n");
       let run: string | undefined;
+      const extras = this.deps.workerExtras ? await this.deps.workerExtras() : {};
       const result = await runTask(
         {
           engine,
           ...this.deps.worker,
+          ...extras,
           observe: {
             started: (id) => {
               run = id;

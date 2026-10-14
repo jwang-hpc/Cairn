@@ -11,6 +11,7 @@ import { EVIDENCE_COMMANDS, EVIDENCE_OPTIONS, EVIDENCE_USAGE, runEvidenceCommand
 import type { ParserRunner } from "./evidence/parse.js";
 import { JOB_COMMANDS, JOB_OPTIONS, JOB_USAGE, runJobCommand } from "./jobs/commands.js";
 import { LITERATURE_COMMANDS, LITERATURE_OPTIONS, LITERATURE_USAGE, runLiteratureCommand } from "./literature/commands.js";
+import { CHAT_COMMANDS, CHAT_OPTIONS, CHAT_USAGE, runChatCommand } from "./session/commands.js";
 import { type LiteratureDeps, openLiteratureService } from "./literature/literature.js";
 import { openJobService } from "./jobs/jobs.js";
 import { LEDGER_COMMANDS, LEDGER_OPTIONS, LEDGER_USAGE, openCurrentProject, runLedgerCommand } from "./ledger/commands.js";
@@ -76,6 +77,8 @@ ${CLAIM_USAGE}
 
 ${LITERATURE_USAGE}
 
+${CHAT_USAGE}
+
 options:
   --version   print engine version
 
@@ -109,6 +112,7 @@ export async function runCli(argv: readonly string[], io: CliIo, deps: CliDeps =
         ...CLAIM_OPTIONS,
         ...EVIDENCE_OPTIONS,
         ...LITERATURE_OPTIONS,
+        ...CHAT_OPTIONS,
       },
       allowPositionals: true,
       strict: true,
@@ -129,7 +133,7 @@ export async function runCli(argv: readonly string[], io: CliIo, deps: CliDeps =
     io.out(USAGE);
     return 0;
   }
-  if (![...["status", "ask", "run", "login", "panel", "serve"], ...LEDGER_COMMANDS, ...JOB_COMMANDS, ...CLAIM_COMMANDS, ...EVIDENCE_COMMANDS, ...LITERATURE_COMMANDS].includes(command)) {
+  if (![...["status", "ask", "run", "login", "panel", "serve"], ...LEDGER_COMMANDS, ...JOB_COMMANDS, ...CLAIM_COMMANDS, ...EVIDENCE_COMMANDS, ...LITERATURE_COMMANDS, ...CHAT_COMMANDS].includes(command)) {
     io.err(`re: unknown command '${command}'`);
     io.err(USAGE);
     return 2;
@@ -148,6 +152,15 @@ export async function runCli(argv: readonly string[], io: CliIo, deps: CliDeps =
   }
 
   if (command === "panel") return runPanelCommand(engine, rest, v, io, deps.env ?? process.env);
+  if ((CHAT_COMMANDS as readonly string[]).includes(command)) {
+    try {
+      const ask = io.interactive && io.login ? { ask: (q: string) => io.login!.ask(q, false) } : {};
+      return await runChatCommand(engine, rest, v, { ...io, ...ask }, deps.env ?? process.env, { ...(deps.jobs ? { jobs: deps.jobs } : {}), ...(deps.worker ? { worker: deps.worker } : {}) });
+    } catch (e) {
+      io.err(`re chat: ${(e as Error).message}`);
+      return 1;
+    }
+  }
   if ((LITERATURE_COMMANDS as readonly string[]).includes(command)) {
     return runLiteratureCommand(engine, rest, v, { ...io, ...(io.login ? { ask: (q: string, secret: boolean) => io.login!.ask(q, secret) } : {}) }, deps.literature, deps.env ?? process.env);
   }

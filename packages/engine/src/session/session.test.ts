@@ -5,6 +5,8 @@ import { cliRunner, git, type Sandbox, type SandboxOptions, specForRole } from "
 import { createModels, fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall, InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import { provenance as P, type EngineEvent } from "@cairn/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createApi } from "../api/api.js";
+import { runCli } from "../cli.js";
 import type { LoadedConfig } from "../config/load.js";
 import { Engine } from "../engine.js";
 import { Ledger } from "../ledger/ledger.js";
@@ -14,7 +16,7 @@ import { COMPACT, runTurn, type SessionContext } from "./orchestrator.js";
 import { SessionStore } from "./store.js";
 import { ProjectView } from "./view.js";
 
-const config = (): LoadedConfig => ({
+const config = (projects: string): LoadedConfig => ({
   dir: "(test)",
   models: {
     providers: { acme: { routes: [{ pi_provider: "faux-key", auth: "api_key" }], data_classes: ["public", "unpublished"], terms_checked: "unchecked" } },
@@ -28,7 +30,7 @@ const config = (): LoadedConfig => ({
     defaults: { secrets: "none", egress: "deny" },
   },
   machines: { machines: {} },
-  engine: { machine: "test", budget: { daily: { usd: { total: 10 }, tokens: {} }, run: { max_usd: 2, max_tokens: 1_000_000, max_turns: 20 } } },
+  engine: { machine: "test", projects_dir: projects, budget: { daily: { usd: { total: 10 }, tokens: {} }, run: { max_usd: 2, max_tokens: 1_000_000, max_turns: 20 } } },
 });
 
 /** Sandbox stand-in (as in worker/run.test.ts): tools run on the host with /work, /outbox, /skills mapped. */
@@ -65,7 +67,7 @@ beforeEach(async () => {
   const stores = { oauth: new InMemoryCredentialStore(), api_key: new InMemoryCredentialStore() };
   const models = { oauth: createModels({ credentials: stores.oauth }), api_key: createModels({ credentials: stores.api_key }) };
   models.api_key.setProvider(faux.provider);
-  engine = new Engine(config(), { configDir: "(test)", home: join(base, "home") }, { models, stores } satisfies PiRuntime);
+  engine = new Engine(config(join(base, "projects")), { configDir: "(test)", home: join(base, "home") }, { models, stores } satisfies PiRuntime);
   ledger = await Ledger.create({ projectsDir: join(base, "projects"), name: "demo", title: "Sieve scaling", dataClass: "unpublished" });
   // Committed evidence, a committed file outside the readable paths, a binary figure, and one uncommitted file.
   await ledger.writeArtifacts(
@@ -220,5 +222,82 @@ describe("delegation (the user's click; at most 3 workers per project)", () => {
     expect((await d.dismiss({ project: "demo", session: rec.id, proposal: "P5" })).state).toBe("dismissed");
     await expect(d.dismiss({ project: "demo", session: rec.id, proposal: "P2" })).rejects.toThrow(/only a proposal waiting for launch/);
     expect(started).toBe(3);
+  });
+});
+
+describe("sessions over the API and in re chat (what the app and the terminal use)", () => {
+  beforeEach(async () => {
+    await mkdir(join(base, "skills"), { recursive: true });
+    await mkdir(engine.paths.home, { recursive: true });
+    await writeFile(join(engine.paths.home, "state.json"), JSON.stringify({ project: "demo" }));
+  });
+  const worker = () => ({ skillsDir: join(base, "skills"), launch: fakeLaunch });
+  const plan = () =>
+    faux.setResponses([
+      (c: unknown) =>
+        isWorker(c)
+          ? fauxAssistantMessage("?")
+          : fauxAssistantMessage(fauxToolCall("propose_task", { role: "analysis", title: "Write the spread note", task: "Write analysis/spread.md" }), { stopReason: "toolUse" }),
+      fauxAssistantMessage("I proposed P1."),
+      (c: unknown) => (isWorker(c) ? fauxAssistantMessage(fauxToolCall("write", { path: "analysis/spread.md", content: "n/a\n" }), { stopReason: "toolUse" }) : fauxAssistantMessage("?")),
+      fauxAssistantMessage("Wrote it."),
+    ]);
+
+  it("API: create, message (events pushed live), launch, follow, steps", async () => {
+    const api = createApi(engine, { env: {}, worker: worker(), poll: { eventsMs: 20, jobsMs: 20, heartbeatMs: 40 } });
+    const call = async (method: string, path: string, body?: unknown) => {
+      const res = await api.handle(new Request(`http://127.0.0.1${path}`, { method, headers: { authorization: `Bearer ${api.token}`, ...(body ? { "content-type": "application/json" } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) }));
+      return { status: res.status, body: (await res.json()) as Record<string, any> };
+    };
+    try {
+      const events = await api.handle(new Request("http://127.0.0.1/api/events", { headers: { authorization: `Bearer ${api.token}` } }));
+      const reader = events.body!.getReader();
+      const s = (await call("POST", "/api/projects/demo/sessions", { title: "Is C01 robust?" })).body.session;
+      expect(s).toMatchObject({ project: "demo", title: "Is C01 robust?", turns: 0 });
+      plan();
+      const m = await call("POST", `/api/projects/demo/sessions/${s.id}/messages`, { text: "Repeat it?" });
+      expect(m.body).toMatchObject({ text: "I proposed P1.", error: null, proposals: [{ id: "P1", state: "proposed" }] });
+      let streamed = "";
+      const dec = new TextDecoder();
+      while (!streamed.includes('"type":"turn_end"')) streamed += dec.decode((await reader.read()).value);
+      expect(streamed).toMatch(/event: session\ndata: \{"type":"proposal","project":"demo","session":"[^"]+","proposal":\{[^}]*"id":"P1","state":"proposed"/);
+      expect(streamed).toMatch(/"type":"turn_delta"/);
+      await reader.cancel();
+      expect((await call("POST", `/api/projects/demo/sessions/${s.id}/messages`, {})).status).toBe(400);
+      expect((await call("POST", `/api/projects/demo/sessions/${s.id}/proposals/P9/launch`)).status).toBe(404);
+      expect((await call("POST", `/api/projects/demo/sessions/${s.id}/proposals/P1/launch`)).body.proposal.state).toBe("queued");
+      expect((await call("POST", `/api/projects/demo/sessions/${s.id}/proposals/P1/launch`)).status).toBe(409);
+      await expect.poll(async () => (await call("GET", `/api/projects/demo/sessions/${s.id}`)).body.proposals[0].state, { timeout: 10_000 }).toBe("done");
+      const got = (await call("GET", `/api/projects/demo/sessions/${s.id}`)).body;
+      expect(got.transcript.map((e: { kind: string }) => e.kind)).toEqual(["user", "proposal", "tool", "assistant", "proposal", "proposal", "proposal"]);
+      const steps = (await call("GET", `/api/runs/${got.proposals[0].run}/steps`)).body.steps as { step: string }[];
+      expect(steps.map((x) => x.step)).toContain("writing analysis/spread.md");
+      expect((await call("GET", "/api/projects/demo/sessions")).body).toMatchObject({ sessions: [{ id: s.id, turns: 1 }], workers: { running: 0, queued: 0 } });
+      expect((await call("GET", "/api/projects/demo/sessions/20990101-0000-ffff")).status).toBe(404);
+    } finally {
+      await api.close();
+    }
+  });
+
+  it("re chat: say, show, launch (follows the worker), sessions", async () => {
+    const re = async (...argv: string[]) => {
+      const out: string[] = [];
+      const err: string[] = [];
+      const code = await runCli(argv, { out: (l) => out.push(l), err: (l) => err.push(l) }, { openEngine: async () => engine, env: {}, worker: worker() });
+      return { code, out: out.join("\n"), err: err.join("\n") };
+    };
+    plan();
+    const said = await re("chat", "say", "Repeat", "it?");
+    expect(said.code).toBe(0);
+    expect(said.out).toMatch(/^orchestrator> I proposed P1\.\n {2}card P1 \[analysis\] Write the spread note {2}\(proposed\) {3}→ re chat launch P1$/);
+    expect((await re("chat", "show")).out).toMatch(/you> Repeat it\?\n {2}card P1 .*\norchestrator> I proposed P1\.\nproposals:\n {2}P1 \[analysis\]/);
+    const launched = await re("chat", "launch", "p1");
+    expect(launched.code).toBe(0);
+    expect(launched.out).toMatch(/^launched P1 \(analysis\): Write the spread note/);
+    expect(launched.out).toContain("P1 · writing analysis/spread.md");
+    expect(launched.out).toMatch(/P1 \[analysis\] Write the spread note {2}\(done\) — /);
+    expect((await re("chat", "sessions")).out).toMatch(/^\d{8}-\d{4}-[0-9a-f]{4} .* {2}1 turns {2}Repeat it\?$/);
+    expect(await re("chat", "launch", "P1")).toMatchObject({ code: 1, err: expect.stringMatching(/P1 is done, not waiting for launch/) });
+    expect(await re("chat")).toMatchObject({ code: 1, err: expect.stringMatching(/needs a terminal/) });
   });
 });

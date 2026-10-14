@@ -123,6 +123,17 @@ Acceptance: the M5 and M6 flows can be completed entirely from the app.
     completed;
   - an analysis agent's claim draft went through the support check, a cross-vendor rigor review (REVISE), and the
     user's approval into `logic/claims.md` as C01 (user-revised).
+- **M8.4 research sessions in the engine: implemented (2026-10-14).**
+  - The orchestrator reads the committed project (its role's read paths) and proposes worker tasks or decisions
+    as cards.
+  - A launched task runs a sandboxed worker in the background (up to three per project, the rest queued), and
+    its steps stream as events. The outcome comes back to the card: report, files, jobs, drafts, literature,
+    cost.
+  - Chats persist and older turns are condensed.
+  - `re chat` (interactive, `say`, `show`, `launch`, `dismiss`, `sessions`), with API routes for
+    sessions, messages, proposals, and run steps, and live session events on `GET /api/events`.
+  - Acceptance pending (the user, from a terminal): ask about C01's review, launch a proposal, see the worker's
+    steps and outcome, resume the chat later.
 - **Next (DR-0014, accepted):** a chat-centred app.
   - M8.4: orchestrator sessions in the engine, and `re chat`.
   - M8.5: the chat layout, with Outline, Approvals, Results, and Literature panels.
