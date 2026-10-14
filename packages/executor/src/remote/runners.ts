@@ -72,12 +72,13 @@ function must(ok: boolean, what: string, value: string): void {
   if (!ok) throw new RemoteError(`refusing to use ${what} ${JSON.stringify(value)} in a remote command`, "");
 }
 
-/** <scratch>/cairn/<project>/<job> */
-export function jobDir(machine: MachineConfig, project: string, id: string): string {
+/** <scratch>/cairn/<project>/<job>, or <job>-r<n> for the n-th launch attempt (a failed attempt's dir is kept). */
+export function jobDir(machine: MachineConfig, project: string, id: string, attempt = 1): string {
   if (!machine.scratch) throw new RemoteError("machine has no scratch path", "");
   must(/^[a-z0-9][a-z0-9-]*$/.test(project), "project name", project);
   must(ID_RE.test(id), "job id", id);
-  const dir = `${machine.scratch.replace(/\/+$/, "")}/cairn/${project}/${id}`;
+  must(Number.isInteger(attempt) && attempt >= 1, "attempt", String(attempt));
+  const dir = `${machine.scratch.replace(/\/+$/, "")}/cairn/${project}/${id}${attempt > 1 ? `-r${attempt}` : ""}`;
   must(DIR_RE.test(dir) && !dir.split("/").includes(".."), "directory", dir);
   return dir;
 }

@@ -17,6 +17,7 @@
     "dist"
   ],
   "dependencies": {
+    "@cairn/executor": "workspace:*",
     "@cairn/launcher": "workspace:*",
     "@cairn/shared": "workspace:*",
     "@earendil-works/pi-agent-core": "1.2.0",

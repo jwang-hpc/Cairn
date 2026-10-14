@@ -20,6 +20,9 @@ importers:
 
   packages/engine:
     dependencies:
+      '@cairn/executor':
+        specifier: workspace:*
+        version: link:../executor
       '@cairn/launcher':
         specifier: workspace:*
         version: link:../launcher
