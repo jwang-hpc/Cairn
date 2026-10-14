@@ -1,0 +1,20 @@
+machines:
+  workstation:
+    host: "<hostname>"   # reached over VPN + SSH ControlMaster
+    scheduler: none
+    auto_approve_below: { cores: 32, hours: 4 }
+  uncc-hpc:
+    host: "<login-node>"
+    scheduler: slurm
+    account: "<allocation>"
+    partitions: ["<allowed>"]
+    max: { nodes: 8, walltime: "12:00:00" }
+    auto_approve_below: { node_hours: 4 }
+  bebop:
+    host: "<login-node>"
+    scheduler: "<slurm|pbs>"
+    account: "<allocation>"
+    partitions: ["<allowed>"]
+    max: { nodes: 4, walltime: "04:00:00" }
+    doe: true            # Tier 0 only; never auto-approve
+    paths: { allowed_prefixes: ["<project dir>", "<scratch dir>"] }

@@ -1,0 +1,22 @@
+roles:
+  literature:
+    mounts: { read: [lit/, logic/], write: [lit/] }
+    network: [literature-proxy]
+    executor_tools: [literature.search, literature.fetch]
+  coder:
+    mounts: { read: [src/, logic/experiments.md], write: [src/, experiments/] }
+    network: [pypi.org, files.pythonhosted.org, registry.npmjs.org]
+    executor_tools: [jobs.submit, jobs.status]
+  analysis:
+    mounts: { read: [evidence/, logic/], write: [analysis/] }
+    network: []
+    executor_tools: [jobs.fetch_results]
+  panel:
+    mounts: { read: [engine/panels/<id>/packet/], write: [engine/panels/<id>/responses/<member>/] }
+    network: []
+    executor_tools: []
+  writer:
+    mounts: { read: [logic/, evidence/, drafts/], write: [drafts/] }
+    network: []
+    executor_tools: []
+defaults: { secrets: none, egress: deny }
