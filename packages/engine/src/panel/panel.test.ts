@@ -166,7 +166,11 @@ describe("data governance (invariant 9)", () => {
 describe("validateSpec", () => {
   it.each([
     [{ members: [spec.members[0]!] }, /at least two members/],
-    [{ rounds: ["critique"] }, /first round must be independent/],
+    [{ rounds: ["critique"] }, /cannot open with critique/],
+    [{ rounds: ["relay", "critique"] }, /critique needs an earlier independent round/],
+    [{ rounds: ["independent", "redteam"] }, /redteam needs a venue/],
+    [{ rounds: ["debate"], exchanges: 9 }, /exchanges must be 1-4/],
+    [{ rounds: ["independent", "vote"] }, /unknown round .vote./],
     [{ rounds: ["independent", "synthesis", "critique"] }, /synthesis must be the last round/],
     [{ synthesizer: undefined }, /needs a synthesizer/],
     [{ synthesizer: { alias: "acme-m", effort: "low" } }, /also a panel member/],
@@ -182,5 +186,52 @@ describe("validateSpec", () => {
     expect(validateSpec(engine, { ...spec, members: [{ alias: "acme-m", effort: "high" }, { alias: "acme-m", effort: "low" }], synthesizer: { alias: "beta-m", effort: "high" } })).toEqual([
       "single-vendor panel (acme); DR-0013 default is members from different vendors",
     ]);
+  });
+});
+
+describe("relay, debate, redteam (DR-0008)", () => {
+  const two = { members: spec.members, synthesizer: spec.synthesizer };
+
+  it("relay: A drafts, B revises, A finalizes — sequential, each step committed under its author", async () => {
+    await setup();
+    const rec = await runPanel(engine, ledger, { ...two, question: "Draft the experiment plan", rounds: ["relay"] });
+    const steps = rec.rounds[0]!.outputs.map((o) => `${o.step}:${o.label}`);
+    expect(steps).toEqual(["draft:Model A", "revision:Model B", "final:Model A"]);
+    expect(rec.rounds[0]!.outputs.map((o) => o.file!.split("/").at(-1))).toEqual(["draft-A.md", "revision-B.md", "final-A.md"]);
+    const revise = prompts.find((p) => p.text.includes("Revise Model A"))!;
+    expect(revise.text).toContain("Draft by Model A");
+    const final = prompts.find((p) => p.text.includes("Finalize"))!;
+    expect(final.text).toContain("Revision by Model B");
+    expect((await ledger.check()).ok).toBe(true);
+  });
+
+  it("debate: the proposer opens from its independent answer, N exchanges, both close with unresolved disagreements", async () => {
+    await setup();
+    const rec = await runPanel(engine, ledger, { ...two, question: "Is 1e-3 the right bound?", rounds: ["independent", "debate", "synthesis"], exchanges: 2 });
+    expect(rec.rounds[1]!.outputs.map((o) => `${o.step}:${o.label}`)).toEqual([
+      "x1-critic:Model B", "x1-proposer:Model A", "x2-critic:Model B", "x2-proposer:Model A", "closing:Model A", "closing:Model B",
+    ]);
+    // No separate opening call: the independent answer is the opening.
+    expect(prompts.filter((p) => p.text.includes("the proposer in a debate. State the strongest"))).toHaveLength(0);
+    const synth = prompts.find((p) => p.text.includes("You synthesize a research review panel"))!;
+    expect(synth.text).toContain("Model B (x2-critic)");
+    expect(synth.text).toContain("Model A (closing)");
+  });
+
+  it("redteam: a hostile review for the named venue that sees the panel's earlier work", async () => {
+    await setup();
+    const rec = await runPanel(engine, ledger, { ...two, question: "Is this ready for submission?", rounds: ["independent", "redteam"], venue: "SC" });
+    expect(rec.rounds[1]!.outputs).toEqual([expect.objectContaining({ step: "review", label: "Model A", status: "ok" })]);
+    const review = prompts.find((p) => p.text.includes("hostile but fair reviewer for SC"))!;
+    expect(review.text).toContain("Panel work so far");
+    expect(review.text).toContain("Model B, round 1 independent");
+  });
+
+  it("warns that relay/debate use only the first two members", async () => {
+    await setup();
+    const three = [...spec.members, { alias: "acme-big", effort: "low" as const }];
+    expect(validateSpec(engine, { question: "q", rounds: ["relay"], members: three })).toContain(
+      "relay and debate use the first two members (Model A and Model B); others sit those rounds out",
+    );
   });
 });
