@@ -128,10 +128,15 @@ and year).
   - **Storage:** the user keeps PDFs on WebDAV, with local copies in Zotero desktop. PDFs and full text therefore come
     only through the desktop (local API or storage folder), never the Web API.
   - **Writes:** Cairn writes only to a separate Zotero group, "Cairn". Its key may write to that group alone; the
-    user's personal library is read-only to Cairn.
+    user's personal library is read-only to Cairn. Cairn writes metadata and notes there, not PDFs: groups can't
+    use WebDAV, so any group file would go to Zotero's own storage, under the group owner's quota.
+  - **User-vouched citations:** an item in the user's personal library can be cited even when it has no DOI or
+    arXiv id that `literature.resolve` could verify, e.g. the MPI standard, software manuals, theses, or lab
+    reports. Its `refs.bib` entry is marked "vouched for by the user", with provenance `user` and the Zotero item
+    key, and `re literature check` verifies it against that Zotero item instead of the public services. Agents
+    can't write to the personal library, so they can't plant an item to cite. Items Cairn wrote to the "Cairn"
+    group don't count as vouched; they were verified by `resolve` anyway.
 - **Decide:**
-  - Whether Zotero items with no DOI or arXiv id (books, DOE/OSTI reports, theses) can be cited as user-vouched
-    references with `user` provenance, since `resolve` can't verify them.
   - Whether to use Zotero's indexed full text (`qmode=everything`, `/fulltext`) for search.
   - Whether per-project collections are worth the exposure.
 
