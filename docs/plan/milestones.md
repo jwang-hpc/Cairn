@@ -110,8 +110,20 @@ Acceptance: the M5 and M6 flows can be completed entirely from the app.
     refresh, cancel, fetch results. Live updates come from `GET /api/events`.
   - Tests cover the engine connection, request checks, the event-stream parser, the views, and a route contract
     with the engine API. Opening a real window is checked by hand.
-- Open: claims and ledger views (the M6 flow, M8.3); panels; notifications; Keychain via safeStorage; signing and
-  notarization.
+- **M8.3 claims and ledger views: implemented (2026-10-14).** The project view has three tabs:
+  - **Jobs**, as in M8.2.
+  - **Claims:** the drafts agents committed on the project's branches (new `re claim drafts` and
+    `GET /api/projects/:name/drafts`), each with where it stands (not reviewed, reviewed with its verdict, approved
+    as C<nn>), and the claims in `logic/claims.md`. A draft goes through the gate from the app: support check, rigor
+    review, then approval with an optional note. Approval is enabled only once a review of this exact draft is on
+    file, and the engine re-checks support.
+  - **Ledger:** hypotheses, the exploration tree, decisions.
+- **M8 acceptance met (2026-10-14), by the user in the app:**
+  - an agent-proposed job on `m5-demo` was approved and launched from the inbox, ran on the workstation, and
+    completed;
+  - an analysis agent's claim draft went through the support check, a cross-vendor rigor review (REVISE), and the
+    user's approval into `logic/claims.md` as C01 (user-revised).
+- Open: panels (blind comparison); notifications; Keychain via safeStorage; signing and notarization.
 
 ## M9 — Campaigns and async
 Campaign spec + runner (scheduler-native arrays/dependencies or headless engine on workstation);

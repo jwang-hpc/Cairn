@@ -10,7 +10,8 @@ cd "$(dirname "$0")/.."
 unset CAIRN_PROJECT   # it would override `re project use` below
 re() { node packages/engine/dist/bin.js "$@"; }
 TARGET="${1:-workstation}"
-PROJECT="m5-demo"; [ "$TARGET" = workstation ] || PROJECT="m5-$TARGET"
+# PROJECT=<name> picks another project (default m5-demo, or m5-<target> for other machines).
+if [ -z "${PROJECT:-}" ]; then PROJECT="m5-demo"; [ "$TARGET" = workstation ] || PROJECT="m5-$TARGET"; fi
 OUT="$(mktemp "${TMPDIR:-/tmp}/cairn-m5.XXXXXX")"
 TASK="$(mktemp "${TMPDIR:-/tmp}/cairn-m5-task.XXXXXX")"
 trap 'rm -f "$OUT" "$TASK"' EXIT
@@ -22,7 +23,15 @@ if grep -q "^$TARGET .*NO SCRATCH" "$OUT"; then echo "FAIL: set machines.$TARGET
 
 echo "== project $PROJECT"
 re project use "$PROJECT" > /dev/null 2>&1 && PROJECTS="$(dirname "$(re project | sed 's|^[^/]*||')")" || PROJECTS=""
-if [ -n "$PROJECTS" ]; then case "$PROJECTS" in /*) rm -rf "${PROJECTS:?}/$PROJECT" ;; *) echo "bad projects dir: $PROJECTS" >&2; exit 1 ;; esac; fi
+if [ -n "$PROJECTS" ]; then
+  # A clean run starts from a new project; never delete one without asking (later acceptance runs build on it: M6 claims).
+  case "$PROJECTS" in /*) ;; *) echo "bad projects dir: $PROJECTS" >&2; exit 1 ;; esac
+  echo "project $PROJECT already exists: $(git -C "$PROJECTS/$PROJECT" rev-list --count HEAD) ledger commits; claims: $(grep -c '^## C[0-9]' "$PROJECTS/$PROJECT/logic/claims.md" || true)"
+  if [ ! -t 0 ]; then echo "FAIL: not deleting $PROJECT without asking; run this in a terminal, or set PROJECT=<another name>" >&2; exit 1; fi
+  printf 'Delete it and start a clean run? [y/N] '
+  read -r ANSWER || ANSWER=""
+  case "$ANSWER" in y|Y|yes) rm -rf "${PROJECTS:?}/$PROJECT" ;; *) echo "kept $PROJECT; nothing done (set PROJECT=<another name> for a separate run)"; exit 0 ;; esac
+fi
 re project new "$PROJECT" --title "M5 acceptance: agent-authored job on $TARGET" --data-class unpublished
 re project use "$PROJECT"
 
