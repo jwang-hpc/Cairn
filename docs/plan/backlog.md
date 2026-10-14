@@ -174,3 +174,12 @@ then arXiv id, then title and year).
     preconditions, so a concurrent edit can't be lost.
 - **Decide:** whether search may use Zotero's indexed full text (it would show agents text from the user's PDFs).
 
+
+## Lab members without Zotero
+*Requested 2026-10-14.* Lab members may use Cairn without Zotero. The paper library (above) must stay optional, and
+everything up to `re literature accept` already works without it.
+- Fits: with the Zotero library work. The library becomes a pluggable backend: Zotero, none (projects only, as
+  in M7), and possibly a plain BibTeX/JabRef file or another manager.
+- Decide: a built-in fallback library for users without a manager, e.g. a git repo in the engine home with the
+  same per-paper sections; whether a shared lab library is wanted (a Zotero group, or a shared repo); and how
+  the user-vouched rule works without Zotero, since vouched items need a library the agent can't write.
