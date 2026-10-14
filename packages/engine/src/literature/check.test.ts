@@ -10,7 +10,7 @@ import type { LoadedConfig } from "../config/load.js";
 import { Engine } from "../engine.js";
 import { envelope } from "../events/log.js";
 import { Ledger } from "../ledger/ledger.js";
-import { checkLiterature, citationsIn, parseBibtex } from "./check.js";
+import { checkLiterature, citationsIn, paperNotes, parseBibtex } from "./check.js";
 
 const SZ3 = "10.1109/tbdata.2022.3201176";
 const CROSSREF: Record<string, unknown> = {
@@ -57,7 +57,9 @@ const SZ3_RECORD: PaperRecord = {
 const TOPOSZ_RECORD: PaperRecord = { ids: { arxiv: "2304.11768" }, title: "TopoSZ: Preserving Topology in Error-Bounded Lossy Compression", authors: ["Lin Yan"], year: 2023, sources: ["arxiv"] };
 const GOOD_BIB = toBibtex(SZ3_RECORD, citekey(SZ3_RECORD)) + "\n" + toBibtex(TOPOSZ_RECORD, citekey(TOPOSZ_RECORD));
 const LOG = `${JSON.stringify({ key: "liang2023sz3" })}\n${JSON.stringify({ key: "yan2023toposz" })}\n`;
-const note = (paper: string, body = "## Problem\nx\n## Method\nx\n## Setup\nx\n## Key numbers\nx\n## Limitations\nx\n## Artifact\nx\n") => `---\npaper: ${paper}\n---\n# T\n\n${body}`;
+const SECTIONS = "## Problem\nx\n## Method\nx\n## Setup\nx\n## Key numbers\nx\n## Limitations\nx\n## Artifact\nx\n## Relevance\nx\n";
+const note = (paper: string, body = SECTIONS, relevance: unknown = 8) =>
+  `---\npaper: ${paper}\n${relevance === null ? "" : `relevance: ${JSON.stringify(relevance)}\n`}---\n# T\n\n${body}`; // null: no score
 const fails = (r: { items: { level: string; where: string; message: string }[] }) => r.items.filter((i) => i.level === "fail").map((i) => `${i.where}: ${i.message}`);
 
 describe("BibTeX and citation parsing", () => {
@@ -102,6 +104,28 @@ describe("checkLiterature (re-verifies, never trusts the log)", () => {
     expect(f).toMatch(/noid2023: field note is not one literature\.resolve writes; neither a doi nor an arXiv eprint/);
     expect(f).toMatch(/lit\/notes\/x\.md: cites ghost2020, which is not in lit\/refs\.bib/);
     expect(r.items.filter((i) => i.level === "warn").map((i) => i.message)).toContain("verified, but not in lit/resolutions.jsonl (not added through literature.resolve)");
+  });
+
+  it("paper notes carry a 0-10 relevance score: missing is a warning, malformed a failure", async () => {
+    const r = await checkLiterature(
+      {
+        refs: GOOD_BIB,
+        resolutions: LOG,
+        notes: [
+          { path: "lit/notes/liang2023sz3.md", text: note(`doi:${SZ3}`, SECTIONS, null) },
+          { path: "lit/notes/yan2023toposz.md", text: note("arxiv:2304.11768", SECTIONS, "high") },
+        ],
+      },
+      lit(),
+    );
+    expect(fails(r)).toEqual(['lit/notes/yan2023toposz.md: relevance must be an integer from 0 to 10, not "high"']);
+    expect(r.items.filter((i) => i.level === "warn").map((i) => `${i.where}: ${i.message}`)).toEqual(["lit/notes/liang2023sz3.md: no relevance score (relevance: 0-10 in the frontmatter)"]);
+    expect(paperNotes([
+      { path: "lit/notes/a2020x.md", text: note("doi:10.1/a", SECTIONS, 4) },
+      { path: "lit/notes/b2021y.md", text: note("doi:10.1/b", SECTIONS, 9) },
+      { path: "lit/notes/c2022z.md", text: note("doi:10.1/c", SECTIONS, 11) },
+      { path: "lit/notes/related-work.md", text: "no frontmatter [@a2020x]" },
+    ]).map((n) => [n.key, n.relevance])).toEqual([["b2021y", 9], ["a2020x", 4], ["c2022z", undefined]]);
   });
 
   it("paper notes are named after their entry and name the same work", async () => {
@@ -166,6 +190,14 @@ describe("re literature check <branch>", () => {
     expect(r.code).toBe(1);
     expect(r.out).toMatch(/^FAIL {2}lit\/notes\/related-work\.md: cites ghost2020, which is not in lit\/refs\.bib/m);
     expect(r.out).toMatch(/FAILED: demo@agent\/literature-1: 2 references, 3 citations in 2 note files, 1 failures$/);
+    await git(dir, ["checkout", "-q", "agent/literature-1"]);
+    await writeFile(join(dir, "lit", "notes", "liang2023sz3.md"), `---\npaper: doi:${SZ3}\ntitle: SZ3\nyear: 2023\nrelevance: 9\n---\n`);
+    await writeFile(join(dir, "lit", "notes", "yan2023toposz.md"), "---\npaper: arxiv:2304.11768\ntitle: TopoSZ\nyear: 2023\nrelevance: 6\n---\n");
+    await git(dir, ["add", "-A"]);
+    await git(dir, ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "notes"]);
+    await git(dir, ["checkout", "-q", "-"]);
+    expect((await re("literature", "notes", "agent/literature-1")).out).toBe(" 9  liang2023sz3             2023  SZ3\n 6  yan2023toposz            2023  TopoSZ");
+    expect((await re("literature", "notes")).out).toBe("(no paper notes)");
     expect((await re("literature", "check", "--upload-pack=evil")).code).not.toBe(0);
     expect(await re("literature", "check", "-x")).toMatchObject({ code: 2 });
   });

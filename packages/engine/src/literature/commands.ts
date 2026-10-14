@@ -11,7 +11,7 @@ import { openCurrentProject } from "../ledger/commands.js";
 import type { Ledger } from "../ledger/ledger.js";
 import { provenance as prov } from "@cairn/shared";
 import { readUsage } from "../events/log.js";
-import { checkLiterature, type CheckReport, type LitFiles } from "./check.js";
+import { checkLiterature, type CheckReport, type LitFiles, paperNotes } from "./check.js";
 import { type LiteratureDeps, openLiteratureService, setLiteratureKey } from "./literature.js";
 
 export const LITERATURE_COMMANDS = ["literature"] as const;
@@ -34,6 +34,7 @@ export const LITERATURE_USAGE = `literature commands (Semantic Scholar, OpenAlex
   literature key s2 [--clear]              store an optional Semantic Scholar API key (secrets folder, host only)
   literature check [<branch>]              before merging a branch: every lit/refs.bib entry re-verified, every
                                            citation in lit/notes/ (and logic/related_work.md) in refs.bib
+  literature notes [<branch>]              paper notes, most relevant first (the agent's 0-10 score)
   literature accept <branch>               check, then write that branch's lit/ into the ledger as one commit
                                            tagged ai-suggested(<the run's model>, <effort>)`;
 
@@ -81,7 +82,7 @@ export async function runLiteratureCommand(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<number> {
   const [sub, value] = args;
-  if (!["contact", "search", "fetch", "resolve", "key", "check", "accept"].includes(sub ?? "")) {
+  if (!["contact", "search", "fetch", "resolve", "key", "check", "accept", "notes"].includes(sub ?? "")) {
     io.err(`re literature: unknown subcommand '${sub ?? ""}'\n${LITERATURE_USAGE}`);
     return 2;
   }
@@ -124,6 +125,13 @@ export async function runLiteratureCommand(
       if (!r) throw new Error("usage: re literature resolve <doi | arxiv:id> | --title T [--year Y] [--author A]");
       printResolution(r, io);
       return r.status === "resolved" ? 0 : 1;
+    }
+    if (sub === "notes") {
+      const ledger = await openCurrentProject(engine, v, env);
+      const notes = paperNotes((await litFiles(ledger, value ?? "HEAD")).notes);
+      if (notes.length === 0) io.out("(no paper notes)");
+      for (const n of notes) io.out(`${n.relevance === undefined ? " -" : String(n.relevance).padStart(2)}  ${n.key.padEnd(24)} ${n.year ?? "    "}  ${(n.title ?? n.paper).slice(0, 90)}`);
+      return 0;
     }
     if (sub === "check" || sub === "accept") {
       const ledger = await openCurrentProject(engine, v, env);
