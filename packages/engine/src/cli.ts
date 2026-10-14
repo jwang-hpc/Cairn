@@ -11,7 +11,7 @@ import { EVIDENCE_COMMANDS, EVIDENCE_OPTIONS, EVIDENCE_USAGE, runEvidenceCommand
 import type { ParserRunner } from "./evidence/parse.js";
 import { JOB_COMMANDS, JOB_OPTIONS, JOB_USAGE, runJobCommand } from "./jobs/commands.js";
 import { LITERATURE_COMMANDS, LITERATURE_OPTIONS, LITERATURE_USAGE, runLiteratureCommand } from "./literature/commands.js";
-import type { LiteratureDeps } from "./literature/literature.js";
+import { type LiteratureDeps, openLiteratureService } from "./literature/literature.js";
 import { openJobService } from "./jobs/jobs.js";
 import { LEDGER_COMMANDS, LEDGER_OPTIONS, LEDGER_USAGE, openCurrentProject, runLedgerCommand } from "./ledger/commands.js";
 import { PANEL_OPTIONS, PANEL_USAGE, runPanelCommand } from "./panel/commands.js";
@@ -204,7 +204,7 @@ export async function runCli(argv: readonly string[], io: CliIo, deps: CliDeps =
         io.err(`re run: cannot read task file: ${(e as Error).message}`);
         return 2;
       }
-      return run(engine, io, { jobs: openJobService(engine, deps.jobs), ...deps.worker }, {
+      return run(engine, io, { jobs: openJobService(engine, deps.jobs), literature: await openLiteratureService(engine, deps.literature), ...deps.worker }, {
         repo, role: v.role, task, keep: v.keep === true,
         ...(v.model ? { alias: v.model } : {}), ...(v.effort ? { effort: v.effort as EffortLevel } : {}),
       });

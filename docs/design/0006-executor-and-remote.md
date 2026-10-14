@@ -81,3 +81,33 @@ Same executor interface; thresholds may allow auto-approval for small jobs.
   looked up (`.cairn/runner.pid`, or `squeue/sacct --name cairn-<job>`) and adopted, never run twice. A scheduler
   error leaves the state unchanged ("unknown"); `lost` is re-checked on the next status. Cards and CLI output
   escape control characters; files with NUL bytes are flagged and still scanned.
+
+## Amendment (2026-10-14): M7 literature tools
+- **Sources:** Semantic Scholar, OpenAlex, arXiv, and Crossref; doi.org's handle API checks that a DOI is
+  registered. DBLP is deferred: it answered with a bot-check page instead of data. Google Scholar has no API and
+  its terms forbid scraping, so it is linked from notes only (a pasted Scholar BibTeX entry goes through
+  `resolve` like any other citation).
+- **Tools:** `literature.search`, `literature.fetch`, `literature.resolve`, and `literature.expand` (one step of the
+  citation graph). They are host-side and serve the same per-run MCP session as `jobs.*`, filtered by
+  `executor_tools`. No model runs inside them.
+- **Network:** each source is pinned to its single host, and redirects are checked against that host. The user's
+  contact address (`re literature contact`, stored in engine.yaml) goes only to OpenAlex and Crossref, their
+  "polite pool". An optional Semantic Scholar key (`re literature key s2`, `<home>/secrets/literature.json`,
+  mode 0600) goes only to Semantic Scholar.
+- **Protections against throttling and overuse:** per-source pacing, Retry-After handling, a breaker after
+  repeated failures, a stop before OpenAlex's free daily credits run out, a 7-day cache in
+  `<home>/literature-cache/` that never stores the address or the key, and at most 300 tool calls per run.
+- **Untrusted data:** every result is labelled as untrusted external data. Search results carry no
+  abstracts; `fetch` gives an abstract, quoted and clipped to 1,500 characters. Markup and control characters are
+  stripped.
+- **Citations:** references enter `lit/refs.bib` only through `literature.resolve`, which accepts:
+  - a DOI that is registered and has metadata from Crossref, OpenAlex, or arXiv;
+  - an arXiv id that exists;
+  - a title that matches exactly one paper closely.
+
+  The resolve tool appends the BibTeX entry and a line to `lit/resolutions.jsonl`. It does this inside the agent's
+  sandbox, with no symlinks followed and append only. A different work with the same citekey gets a suffix. BibTeX
+  values are plain text: no backslashes or braces survive. `re literature check` re-verifies the file before a
+  branch is merged (M7.3); this amends DR-0007's "DOI/DBLP" to DOI or arXiv id.
+- **Open:** queries go to four public APIs whatever the project's data class. They are short keyword strings, not
+  project data, but whether `restricted` projects may use them is for the user to decide.

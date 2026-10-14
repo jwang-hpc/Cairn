@@ -65,7 +65,7 @@ describe("specForRole", () => {
     expect(() => specForRole({ ...base, role: "coder" })).toThrow(/allows pypi\.org.*but no egress proxy/);
   });
 
-  it("named egress services are refused until they exist (literature-proxy, M7)", () => {
+  it("named egress services are refused (only domains are; literature goes through executor tools, M7)", () => {
     expect(() => specForRole({ ...base, role: "literature" })).toThrow("named services not available yet: literature-proxy");
   });
 
