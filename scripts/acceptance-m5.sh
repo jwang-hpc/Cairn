@@ -2,13 +2,15 @@
 # M5 acceptance: a coder agent authors a job; you approve it from the CLI; it runs on the workstation; its results
 # land in evidence/raw/. Run in your own terminal, on the VPN, with the agent image built and `container` running.
 #   sh scripts/ssh-master.sh open workstation      # first: your SSH session (the human gate)
-#   sh scripts/acceptance-m5.sh [target]           # default target: workstation
-# CALLS A REAL MODEL (one coder run) and RUNS A SMALL JOB on the target. Removes any previous m5-demo project.
+#   sh scripts/acceptance-m5.sh [target]           # default: workstation; also e.g. uncc-hpc (Slurm)
+# CALLS A REAL MODEL (one coder run) and RUNS A SMALL JOB on the target. Uses project m5-demo (workstation) or
+# m5-<target>, removing any previous one.
 set -eu
 cd "$(dirname "$0")/.."
 unset CAIRN_PROJECT   # it would override `re project use` below
 re() { node packages/engine/dist/bin.js "$@"; }
 TARGET="${1:-workstation}"
+PROJECT="m5-demo"; [ "$TARGET" = workstation ] || PROJECT="m5-$TARGET"
 OUT="$(mktemp "${TMPDIR:-/tmp}/cairn-m5.XXXXXX")"
 TASK="$(mktemp "${TMPDIR:-/tmp}/cairn-m5-task.XXXXXX")"
 trap 'rm -f "$OUT" "$TASK"' EXIT
@@ -18,11 +20,11 @@ re machine list | tee "$OUT"
 grep -q "^$TARGET .*session open" "$OUT" || { echo "FAIL: no open session to $TARGET (sh scripts/ssh-master.sh open <alias>)" >&2; exit 1; }
 if grep -q "^$TARGET .*NO SCRATCH" "$OUT"; then echo "FAIL: set machines.$TARGET.scratch in config/machines.yaml" >&2; exit 1; fi
 
-echo "== project m5-demo"
-re project use m5-demo > /dev/null 2>&1 && PROJECTS="$(dirname "$(re project | sed 's|^[^/]*||')")" || PROJECTS=""
-if [ -n "$PROJECTS" ]; then case "$PROJECTS" in /*) rm -rf "$PROJECTS/m5-demo" ;; *) echo "bad projects dir: $PROJECTS" >&2; exit 1 ;; esac; fi
-re project new m5-demo --title "M5 acceptance: agent-authored job on the workstation"
-re project use m5-demo
+echo "== project $PROJECT"
+re project use "$PROJECT" > /dev/null 2>&1 && PROJECTS="$(dirname "$(re project | sed 's|^[^/]*||')")" || PROJECTS=""
+if [ -n "$PROJECTS" ]; then case "$PROJECTS" in /*) rm -rf "${PROJECTS:?}/$PROJECT" ;; *) echo "bad projects dir: $PROJECTS" >&2; exit 1 ;; esac; fi
+re project new "$PROJECT" --title "M5 acceptance: agent-authored job on $TARGET"
+re project use "$PROJECT"
 
 cat > "$TASK" <<EOF
 Create experiment EXP-001 that measures how long pure-Python prime counting takes on the $TARGET machine.
@@ -55,13 +57,13 @@ else
   echo "note: job is $FIRST (auto-approved as an identical rerun of a job you approved earlier)"
 fi
 
-echo "== waiting for the job"
+echo "== waiting for the job (up to 30 minutes; a Slurm job may queue first)"
 i=0
 while :; do
   re job status "$ID" > "$OUT"
   STATE="$(sed -n '1s/^[^ ]*  \([a-z_]*\).*/\1/p' "$OUT")"
   case "$STATE" in completed|failed|cancelled|lost) break ;; esac
-  i=$((i + 1)); [ "$i" -lt 120 ] || { echo "FAIL: still $STATE after 10 minutes" >&2; exit 1; }
+  i=$((i + 1)); [ "$i" -lt 360 ] || { echo "FAIL: still $STATE after 30 minutes (re job status $ID to keep following)" >&2; exit 1; }
   sleep 5
 done
 cat "$OUT"
