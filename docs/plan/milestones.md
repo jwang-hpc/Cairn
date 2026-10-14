@@ -55,6 +55,10 @@ jobs.submit/status/fetch_results/cancel with linting against machines.yaml and a
 audit log; workstation first, then UNCC HPC; DOE target configured but Tier 0 only.
 Acceptance: a coder agent authors a job; user approves via CLI; job runs on the workstation; results land
 in evidence/raw/.
+**Status (2026-10-14): implemented (M5.1–M5.5), acceptance not yet run.** Job lint, mux-only SSH runners
+(workstation, Slurm), approvals, audit log, ledger records, `jobs.*` MCP tools, `re job`/`re machine`; offline
+tests run the real scripts locally. Live acceptance (`scripts/acceptance-m5.sh`) and escape test 6b need your
+terminal: VPN, an open master, and `scratch`/`host` set in config/machines.yaml.
 
 ## M6 — Analysis and claim gate
 Python parser framework; support check (code-first, provcheck-style); rigor review; user approval into

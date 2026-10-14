@@ -81,7 +81,12 @@ export class JobService {
   }
 
   #transport(m: MachineConfig): Transport {
-    return this.opts.transport?.(m) ?? new SshTransport(m.host, join(this.opts.home, "ssh"));
+    if (this.opts.transport) return this.opts.transport(m);
+    try {
+      return new SshTransport(m.host, join(this.opts.home, "ssh"));
+    } catch (e) {
+      throw new RemoteError(`machines.yaml host ${JSON.stringify(m.host)}: ${(e as Error).message}`, "");
+    }
   }
 
   #remote(r: JobRecord, files: RemoteJob["files"] = []): RemoteJob {
@@ -126,7 +131,7 @@ export class JobService {
     let preflightNote: string | undefined;
     if (machine.scheduler === "slurm") {
       const transport = this.#transport(machine);
-      if (await transport.alive()) {
+      if (await transport.alive().catch(() => false)) {
         const rj: RemoteJob = { id, dir: jobDir(machine, req.project, id), manifest, lint, files };
         const p = await runnerFor(machine, transport).preflight(rj).catch((e: unknown) => {
           if (e instanceof RemoteError) return { ok: false, detail: `pre-flight failed: ${e.message}`, raw: e.raw };
@@ -210,11 +215,11 @@ export class JobService {
       if (r.remote) throw new JobError(`job ${id} was already launched`);
       const machine = this.#machine(r.target);
       const attempt = (r.attempts ?? 0) + 1;
-      const transport = this.#transport(machine);
-      const rj: RemoteJob = { id, dir: jobDir(machine, r.project, id, attempt), manifest: r.manifest, lint: r.lint, files: await this.store.files(r) };
+      const files = await this.store.files(r);
       const base = { actor: r.approval?.by ?? "user", job: id, project: r.project, target: r.target, action: "launch" };
       try {
-        const res = await runnerFor(machine, transport).start(rj);
+        const rj: RemoteJob = { id, dir: jobDir(machine, r.project, id, attempt), manifest: r.manifest, lint: r.lint, files };
+        const res = await runnerFor(machine, this.#transport(machine)).start(rj);
         const at = this.#at();
         const state: JobState = machine.scheduler === "none" ? "running" : "submitted";
         const job = await this.store.update(id, (x) =>

@@ -48,6 +48,7 @@ export function lintJob({ target, machine, files }: LintInput): LintOutcome {
     errors.push(`unknown target '${target}' (not in machines.yaml)`);
     return empty();
   }
+  if (!/^[A-Za-z0-9_][A-Za-z0-9._-]*$/.test(machine.host)) errors.push(`${target}: machines.yaml host ${JSON.stringify(machine.host)} is not an ssh alias (still a placeholder?)`);
   if (machine.scheduler === "pbs") errors.push(`${target}: PBS submission is not implemented yet`);
   if (!machine.scratch) errors.push(`${target}: machines.yaml has no scratch path for job directories`);
 

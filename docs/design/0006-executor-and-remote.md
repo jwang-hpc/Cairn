@@ -63,3 +63,13 @@ Same executor interface; thresholds may allow auto-approval for small jobs.
 - **Auto-approval** additionally requires an exact rerun (same file fingerprint) of a job the user approved before,
   and no lint warnings. Every new script is approved by a human once; the "approved template" of step 3 is that
   earlier job.
+- **Runtime shape (M5):** one jobs MCP session per agent run, in-process behind the authenticated front (bearer
+  token per run, Host and path checks); the session fixes project, worktree, author, and the role's
+  `executor_tools`. No MCP tool approves: `re job approve` (later the app) is the only approval path. The
+  executor submits the fingerprint-checked snapshot taken at `jobs.submit`, never the live worktree.
+- **States:** pending_approval → approved → submitted/running → completed/failed/cancelled (or denied, lost).
+  Proposal (`ai-suggested`), decision (`user`), launch, final state and results (`ai-executed`) are ledger
+  commits; every action and raw remote output goes to `<engine home>/audit.log` (host only).
+- **Workstation runner:** job in its own process group (perl `setpgrp`) with a wall-clock watchdog; exit code
+  and timestamps in `.cairn/` next to the job. Fetch copies only regular, single-link files inside the job
+  directory (no symlinks or hard links), ≤ 10 MiB each and 50 MiB per fetch; larger files are referenced.
