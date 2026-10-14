@@ -11,6 +11,7 @@ import { EVIDENCE_COMMANDS, EVIDENCE_OPTIONS, EVIDENCE_USAGE, runEvidenceCommand
 import type { ParserRunner } from "./evidence/parse.js";
 import { JOB_COMMANDS, JOB_OPTIONS, JOB_USAGE, runJobCommand } from "./jobs/commands.js";
 import { LITERATURE_COMMANDS, LITERATURE_OPTIONS, LITERATURE_USAGE, runLiteratureCommand } from "./literature/commands.js";
+import type { LiteratureDeps } from "./literature/literature.js";
 import { openJobService } from "./jobs/jobs.js";
 import { LEDGER_COMMANDS, LEDGER_OPTIONS, LEDGER_USAGE, openCurrentProject, runLedgerCommand } from "./ledger/commands.js";
 import { PANEL_OPTIONS, PANEL_USAGE, runPanelCommand } from "./panel/commands.js";
@@ -36,6 +37,8 @@ export interface CliDeps {
   worker?: Partial<Omit<WorkerDeps, "engine">>;
   /** Overrides for the jobs service (tests inject a local transport). */
   jobs?: Partial<JobServiceOptions>;
+  /** Literature proxy overrides (tests inject a fake fetch). */
+  literature?: LiteratureDeps;
   /** Parser runner (tests run parsers on the host). */
   parsers?: ParserRunner;
   /** `re serve` runs until this settles (default: SIGINT or SIGTERM). */
@@ -143,7 +146,9 @@ export async function runCli(argv: readonly string[], io: CliIo, deps: CliDeps =
   }
 
   if (command === "panel") return runPanelCommand(engine, rest, v, io, deps.env ?? process.env);
-  if ((LITERATURE_COMMANDS as readonly string[]).includes(command)) return runLiteratureCommand(engine, rest, v, io);
+  if ((LITERATURE_COMMANDS as readonly string[]).includes(command)) {
+    return runLiteratureCommand(engine, rest, v, { ...io, ...(io.login ? { ask: (q: string, secret: boolean) => io.login!.ask(q, secret) } : {}) }, deps.literature);
+  }
   if ((EVIDENCE_COMMANDS as readonly string[]).includes(command)) return runEvidenceCommand(engine, rest, v, io, deps.env ?? process.env, deps.parsers);
   if ((CLAIM_COMMANDS as readonly string[]).includes(command)) return runClaimCommand(engine, rest, v, io, deps.env ?? process.env);
   if ((JOB_COMMANDS as readonly string[]).includes(command)) return runJobCommand(engine, command, rest, v, io, deps.env ?? process.env, deps.jobs);
