@@ -92,7 +92,7 @@ export class EngineClient {
     const res = await this.fetchFn(new URL("/api/events", this.info.url), { headers: { authorization: `Bearer ${this.info.token}`, accept: "text/event-stream" }, signal });
     if (res.status !== 200 || !res.body) throw new Error(`events: HTTP ${res.status}`);
     const parser = sseParser((name, data) => {
-      if (name !== "job" && name !== "engine") return;
+      if (name !== "job" && name !== "engine" && name !== "session") return;
       try {
         onEvent(JSON.parse(data) as EngineEvent);
       } catch {

@@ -1,6 +1,6 @@
 // Typed calls over window.cairn. The renderer only knows paths and shapes; the main process holds the connection.
 import type { JobRecord } from "@cairn/shared";
-import type { CairnBridge, EngineResponse } from "../shared/bridge.js";
+import type { CairnBridge, EngineResponse, Proposal } from "../shared/bridge.js";
 
 declare global {
   interface Window {
@@ -63,6 +63,50 @@ export interface Hypothesis {
   provenance: string;
 }
 
+export interface SessionMeta {
+  id: string;
+  project: string;
+  title: string;
+  created: string;
+  updated: string;
+  turns: number;
+}
+
+/** One line of a session's transcript (engine: session/store.ts). */
+export type TranscriptEntry =
+  | { at: string; kind: "user"; text: string }
+  | { at: string; kind: "assistant"; text: string; run: string; ms: number; usd?: number; error?: string }
+  | { at: string; kind: "tool"; run: string; name: string; text: string; isError: boolean }
+  | { at: string; kind: "proposal"; proposal: Proposal }
+  | { at: string; kind: "system"; text: string };
+
+export interface SessionView {
+  session: SessionMeta;
+  summary: string | null;
+  proposals: Proposal[];
+  transcript: TranscriptEntry[];
+  workers: { running: number; queued: number };
+}
+
+export interface FileEntry {
+  path: string;
+  bytes: number;
+}
+
+export type FileContent =
+  | { path: string; bytes: number; kind: "text"; text: string }
+  | { path: string; bytes: number; kind: "image" | "pdf"; mime: string; base64: string }
+  | { path: string; bytes: number; kind: "binary" };
+
+export interface PaperNote {
+  path: string;
+  key: string;
+  paper: string;
+  relevance?: number;
+  title?: string;
+  year?: number;
+}
+
 function unwrap<T>(r: EngineResponse): T {
   if (r.status >= 400) {
     const err = (r.body as { error?: unknown } | null)?.error;
@@ -97,6 +141,19 @@ export function api(bridge: CairnBridge) {
     hypotheses: async (p: string) => (await get<{ hypotheses: Hypothesis[] }>(proj(p, "hypotheses"))).hypotheses,
     tree: async (p: string) => (await get<{ text: string }>(proj(p, "tree"))).text,
     decisions: async (p: string) => (await get<{ decisions: Entry[] }>(proj(p, "decisions"))).decisions,
+    // research sessions (DR-0014)
+    sessions: (p: string) => get<{ sessions: SessionMeta[]; workers: { running: number; queued: number } }>(proj(p, "sessions")),
+    newSession: async (p: string, title?: string) => (await post<{ session: SessionMeta }>(proj(p, "sessions"), title ? { title } : {})).session,
+    session: (p: string, id: string) => get<SessionView>(proj(p, `sessions/${encodeURIComponent(id)}`)),
+    send: (p: string, id: string, text: string) =>
+      post<{ text: string; run: string; usd: number; ms: number; error: string | null; proposals: Proposal[] }>(proj(p, `sessions/${encodeURIComponent(id)}/messages`), { text }),
+    proposal: async (p: string, id: string, pid: string, action: "launch" | "dismiss" | "stop") =>
+      (await post<{ proposal: Proposal }>(proj(p, `sessions/${encodeURIComponent(id)}/proposals/${encodeURIComponent(pid)}/${action}`))).proposal,
+    steps: async (run: string) => (await get<{ steps: { at: string; step: string }[] }>(`/api/runs/${encodeURIComponent(run)}/steps`)).steps,
+    // project files and literature
+    files: (p: string, dir = "") => get<{ files: FileEntry[]; truncated: boolean }>(`${proj(p, "files")}${dir ? `?dir=${encodeURIComponent(dir)}` : ""}`),
+    file: async (p: string, path: string) => (await get<{ file: FileContent }>(`${proj(p, "file")}?path=${encodeURIComponent(path)}`)).file,
+    literature: (p: string) => get<{ notes: PaperNote[]; references: number }>(proj(p, "literature")),
   };
 }
 
