@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { EgressEvent, EngineEvent, RolesConfig } from "../../packages/shared/src/index.js";
 import { EventLog, envelope } from "../../packages/engine/src/events/log.js";
+import { sandboxExperimentReader } from "../../packages/engine/src/tools/executor.js";
 import { type AuditEntry, createFront, JobService, LocalTransport, serveFront } from "../../packages/executor/src/index.js";
 import {
   ContainerRuntime,
@@ -244,7 +245,11 @@ describe.skipIf(!ON)("escape suite (DR-0005)", () => {
     });
     const submit = (experiment: string) =>
       jobs
-        .submit({ project: "esc", worktree: wtA.path, experiment, target: "workstation", author: { kind: "agent", run: "escape-suite", agent: wtA.agentId, role: "coder", model: "none", effort: "low" } })
+        // As jobs.submit does for agents: the experiment is read inside A's own container.
+        .submit({
+          project: "esc", worktree: wtA.path, experiment, target: "workstation", read: sandboxExperimentReader(A.exec),
+          author: { kind: "agent", run: "escape-suite", agent: wtA.agentId, role: "coder", model: "none", effort: "low" },
+        })
         .then(() => "accepted", (e: Error) => e.message);
     const first = await submit("EXP-001");
     expect(first).toMatch(/nodes must be 1, not 99/);

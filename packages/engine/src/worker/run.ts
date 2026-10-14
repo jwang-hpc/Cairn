@@ -22,7 +22,7 @@ import type { Engine } from "../engine.js";
 import { envelope, readUsage } from "../events/log.js";
 import type { CallSpec } from "../models/layer.js";
 import { clip, confinedTools } from "../tools/confined.js";
-import { connectExecutorTools, type ExecutorTools } from "../tools/executor.js";
+import { connectExecutorTools, type ExecutorTools, sandboxExperimentReader } from "../tools/executor.js";
 
 /** Task input: plain text, delivered to the agent as /outbox/task.md (TaskSpec is files, not chat). */
 export interface TaskSpec {
@@ -73,7 +73,7 @@ const DEFAULT_MAX_MINUTES = 15;
 function systemPrompt(role: string, sb: Sandbox, executorTools: string[]): string {
   const mounts = sb.spec.mounts
     .filter((m) => m.target.startsWith("/work/"))
-    .map((m) => `  - ${m.target}${m.kind === "dir" ? "/" : ""} (${m.readonly ? "read-only" : "writable"})`)
+    .map((m) => `  - ${m.target}${m.kind === "dir" ? "/" : ""} (${m.readonly ? "read-only" : "writable"}${m.files ? `; only ${m.files.join(", ")}` : ""})`)
     .join("\n");
   const net =
     sb.spec.egressDomains.length > 0
@@ -160,6 +160,7 @@ export async function runWorker(deps: WorkerDeps, task: TaskSpec, worktree: Work
         branch: worktree.branch,
         agent: { run: runId, agent: worktree.agentId, role, model, effort },
         tools: roleCfg.executor_tools,
+        read: sandboxExperimentReader(sandbox.exec),
       });
     }
     agent = new Agent({

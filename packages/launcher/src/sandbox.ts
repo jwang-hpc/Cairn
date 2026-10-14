@@ -1,5 +1,6 @@
 // One agent sandbox: own --internal network, hardened container with role mounts, and (only if the role
 // allows domains) an egress proxy on the network's gateway. close() always tears everything down.
+import { rm } from "node:fs/promises";
 import type { RolesConfig } from "@cairn/shared";
 import { type EgressDecision, EgressProxy } from "./egress.js";
 import { prepareMounts } from "./mounts.js";
@@ -45,16 +46,19 @@ export async function launchSandbox(opts: SandboxOptions): Promise<Sandbox> {
   let started = false;
   let proxy: ProxyLike | undefined;
   const name = `cairn-${request.agentId}`;
+  // Staged read-only role files live next to (never inside) the writable outbox.
+  const staging = `${request.outboxDir.replace(/\/+$/, "")}.ro`;
   const teardown = async () => {
     await proxy?.close().catch(() => {});
     if (started) await runtime.remove(name);
     await runtime.deleteNetwork(network.name).catch(() => {});
+    await rm(staging, { recursive: true, force: true }).catch(() => {});
   };
 
   try {
     const proxyUrl = domains.length > 0 ? `http://${network.gateway}:${PROXY_PORT}` : undefined;
     const spec = specForRole({ ...request, network: network.name, ...(proxyUrl ? { proxyUrl } : {}) });
-    const prepared = await prepareMounts(spec, { worktree: request.worktree, skills: request.skillsDir, outbox: request.outboxDir });
+    const prepared = await prepareMounts(spec, { worktree: request.worktree, skills: request.skillsDir, outbox: request.outboxDir, staging });
     await runtime.start(prepared.spec, { roots: prepared.roots, network: network.name });
     started = true;
     if (proxyUrl) {

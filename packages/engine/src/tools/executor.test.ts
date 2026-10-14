@@ -1,11 +1,12 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createExecutorEndpoint, type ExecutorSession, JobService, LocalTransport } from "@cairn/executor";
 import { McpClient, McpHttpError, StreamableHttpTransport } from "@earendil-works/pi-mcp";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { agentToolName, connectExecutorTools } from "./executor.js";
+import { cliRunner } from "@cairn/launcher";
+import { agentToolName, connectExecutorTools, sandboxExperimentReader } from "./executor.js";
 
 let root: string;
 let home: string;
@@ -127,5 +128,31 @@ describe("executor tools over MCP (DR-0004 seam 4, DR-0005 escape seeds)", () =>
       await coder.close();
       await analysis.close();
     }
+  });
+});
+
+describe("sandboxExperimentReader (jobs.submit reads inside the agent's sandbox)", () => {
+  // Stand-in for container exec: python on the host with /work mapped to the worktree.
+  const exec = (wt: string) => (command: readonly string[], o: { input?: string; timeoutMs?: number; maxOutputBytes?: number } = {}) =>
+    cliRunner("/usr/bin/python3").run(command.slice(1), { ...o, ...(o.input ? { input: o.input.replaceAll("/work", wt) } : {}) });
+
+  it("returns regular files; refuses symlinks, symlinked dirs, and names that aren't experiment names", async () => {
+    const wt = join(root, "wt");
+    await mkdir(join(wt, "experiments/EXP-001/lib"), { recursive: true });
+    await writeFile(join(wt, "experiments/EXP-001/lib/util.py"), "x = 1\n");
+    const read = sandboxExperimentReader(exec(wt));
+    expect((await read("EXP-001")).map((f) => [f.path, f.content.toString()]).sort()).toEqual([
+      ["job.json", expect.any(String)],
+      ["lib/util.py", "x = 1\n"],
+      ["run.sh", "echo 42 > results.csv\n"],
+    ]);
+    await symlink("/etc/hosts", join(wt, "experiments/EXP-001/hosts"));
+    await expect(read("EXP-001")).rejects.toThrow("experiments/EXP-001/hosts is a symlink; job files must be regular files");
+    await mkdir(join(wt, "experiments/EXP-002"));
+    await symlink("/etc", join(wt, "experiments/EXP-002/etc"));
+    await expect(read("EXP-002")).rejects.toThrow("experiments/EXP-002/etc is a symlink");
+    await symlink("/etc", join(wt, "experiments/EXP-003"));
+    await expect(read("EXP-003")).rejects.toThrow("experiments/EXP-003 is not a directory (symlinks are not followed)");
+    await expect(read("../../etc")).rejects.toThrow(/must be a name like EXP-001/);
   });
 });

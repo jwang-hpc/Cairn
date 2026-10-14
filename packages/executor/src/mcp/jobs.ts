@@ -9,6 +9,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 import { EXPERIMENT_PATTERN, JOB_ID_PATTERN, type EffortLevel, type JobRecord, type MachineConfig } from "@cairn/shared";
 import { createFront } from "../front.js";
 import type { JobService } from "../jobs/service.js";
+import type { JobFileContent } from "../jobs/lint.js";
 import { JobError } from "../jobs/store.js";
 
 export const JOB_TOOLS = ["jobs.submit", "jobs.status", "jobs.fetch_results", "jobs.cancel"] as const;
@@ -22,6 +23,8 @@ export interface ExecutorSession {
   agent: { run: string; agent: string; role: string; model: string; effort: EffortLevel };
   /** roles.yaml executor_tools for the agent's role. */
   tools: readonly string[];
+  /** Reads experiments/<name>/ inside the agent's sandbox (see SubmitRequest.read). */
+  read?: (experiment: string) => Promise<JobFileContent[]>;
 }
 
 type ToolResult = { content: { type: "text"; text: string }[]; isError?: boolean };
@@ -155,6 +158,7 @@ export function createJobsMcp(service: JobService, session: ExecutorSession): Jo
           experiment: String(args.experiment ?? ""),
           target: String(args.target ?? ""),
           author,
+          ...(session.read ? { read: session.read } : {}),
         });
         return ok(auto.ok ? `Auto-approved (${auto.reason}).\n${describeJob(job)}` : describeJob(job));
       }

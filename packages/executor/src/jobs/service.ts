@@ -17,8 +17,8 @@ import { jobDir, RemoteError, type RemoteJob, runnerFor } from "../remote/runner
 import { SshTransport, type Transport } from "../remote/transport.js";
 import { AuditLog } from "./audit.js";
 import { renderCard } from "./card.js";
-import { autoApproval, lintJob } from "./lint.js";
-import { describeFiles, fingerprint, JobError, JobStore, snapshotExperiment } from "./store.js";
+import { autoApproval, type JobFileContent, lintJob } from "./lint.js";
+import { describeFiles, EXPERIMENT_RE, fingerprint, JobError, JobStore, snapshotExperiment } from "./store.js";
 
 /** The project ledger, as the executor sees it: one commit per call. */
 export interface JobLedger {
@@ -40,6 +40,12 @@ export interface SubmitRequest {
   project: string;
   /** Host path of the worktree holding experiments/<experiment>/. */
   worktree: string;
+  /**
+   * Reads experiments/<experiment>/ for an agent's submission. The engine passes one that reads inside the agent's
+   * sandbox, whose mounts can't reach host files, so no symlink race in the worktree can pull in a host secret.
+   * Without it, the host reads the worktree (user submissions, tests).
+   */
+  read?: (experiment: string) => Promise<JobFileContent[]>;
   branch?: string;
   experiment: string;
   target: string;
@@ -119,7 +125,8 @@ export class JobService {
     const machine = this.opts.machines[req.target];
     let files;
     try {
-      files = await snapshotExperiment(req.worktree, req.experiment);
+      if (!EXPERIMENT_RE.test(req.experiment)) throw new JobError(`experiment must be a name like EXP-001, not ${JSON.stringify(req.experiment)}`);
+      files = req.read ? await req.read(req.experiment) : await snapshotExperiment(req.worktree, req.experiment);
     } catch (e) {
       return reject((e as Error).message);
     }
@@ -147,7 +154,7 @@ export class JobService {
 
     const fp = fingerprint(files);
     const all = await this.store.list();
-    const twin = all.find((j) => j.project === req.project && j.fingerprint === fp && j.approval?.by === "user");
+    const twin = all.find((j) => j.project === req.project && j.target === req.target && j.fingerprint === fp && j.approval?.by === "user");
     const auto = autoApproval(req.target, machine, lint, twin !== undefined);
     const at = this.#at();
     let job: JobRecord = {
@@ -218,14 +225,26 @@ export class JobService {
       const files = await this.store.files(r);
       const base = { actor: r.approval?.by ?? "user", job: id, project: r.project, target: r.target, action: "launch" };
       try {
-        const rj: RemoteJob = { id, dir: jobDir(machine, r.project, id, attempt), manifest: r.manifest, lint: r.lint, files };
-        const res = await runnerFor(machine, this.#transport(machine)).start(rj);
+        const runner = runnerFor(machine, this.#transport(machine));
+        // A failed launch may still have started (connection lost after sbatch, slow start): adopt it, never run twice.
+        let started: { id: string; raw: string; dir: string; adopted?: number } | undefined;
+        for (let k = attempt - 1; k >= 1 && !started; k--) {
+          const dir = jobDir(machine, r.project, id, k);
+          const found = await runner.find({ id, dir, manifest: r.manifest, lint: r.lint, files: [] });
+          if (found) started = { ...found, dir, adopted: k };
+        }
+        if (!started) {
+          const rj: RemoteJob = { id, dir: jobDir(machine, r.project, id, attempt), manifest: r.manifest, lint: r.lint, files };
+          started = { ...(await runner.start(rj)), dir: rj.dir };
+        }
+        const res = started;
         const at = this.#at();
         const state: JobState = machine.scheduler === "none" ? "running" : "submitted";
+        const note = `${machine.host}: ${res.id}${res.adopted ? ` (attempt ${res.adopted} had started after all)` : ""}`;
         const job = await this.store.update(id, (x) =>
-          transition(withoutError({ ...x, attempts: attempt, remote: { host: machine.host, dir: rj.dir, id: res.id, submitted: at } }), state, at, `${machine.host}: ${res.id}`),
+          transition(withoutError({ ...x, attempts: res.adopted ?? attempt, remote: { host: machine.host, dir: res.dir, id: res.id, submitted: at } }), state, at, note),
         );
-        await this.audit.append({ ...base, ok: true, detail: `${rj.dir} (${res.id})`, raw: res.raw });
+        await this.audit.append({ ...base, ok: true, detail: `${res.dir} (${res.id})${res.adopted ? " adopted" : ""}`, raw: res.raw });
         await this.#record(job, executedBy(r.author), `job ${id}: started on ${r.target} (${res.id})`);
         return job;
       } catch (e) {
@@ -249,11 +268,16 @@ export class JobService {
       await this.audit.append({ actor: "executor", job: id, project: r.project, target: r.target, action: "status", ok: false, detail: e.message, raw: e.raw });
       throw new JobError(`could not reach ${r.target}: ${e.message} (last known state: ${r.state})`);
     }
+    if (st.state === "unknown") {
+      await this.audit.append({ actor: "executor", job: id, project: r.project, target: r.target, action: "status", ok: false, detail: `state unknown, kept ${r.state}: ${st.detail}`, raw: st.raw });
+      return r;
+    }
     if (st.state === r.state) return r;
+    const next = st.state;
     const at = this.#at();
-    const job = await this.store.update(id, (x) => (x.state === r.state ? transition(x, st.state, at, st.detail) : x));
+    const job = await this.store.update(id, (x) => (x.state === r.state ? transition(x, next, at, st.detail) : x));
     await this.audit.append({ actor: "executor", job: id, project: r.project, target: r.target, action: "status", ok: true, detail: `${r.state} → ${job.state}: ${st.detail}`, raw: st.raw });
-    if (TERMINAL_JOB_STATES.includes(job.state)) await this.#record(job, executedBy(r.author), `job ${id}: ${job.state} (${st.detail})`);
+    if (TERMINAL_JOB_STATES.includes(job.state) || job.state === "lost") await this.#record(job, executedBy(r.author), `job ${id}: ${job.state} (${st.detail})`);
     return job;
   }
 
@@ -344,13 +368,16 @@ export class JobService {
   async card(id: string): Promise<string> {
     const job = await this.store.get(id);
     const files = await this.store.files(job);
-    const twin = (await this.store.list()).find((j) => j.id !== id && j.project === job.project && j.fingerprint === job.fingerprint && j.approval?.by === "user");
+    const twin = (await this.store.list()).find(
+      (j) => j.id !== id && j.project === job.project && j.target === job.target && j.fingerprint === job.fingerprint && j.approval?.by === "user",
+    );
     const machine = this.opts.machines[job.target];
     const auto = machine && job.state === "pending_approval" ? autoApproval(job.target, machine, job.lint, twin !== undefined) : undefined;
     return renderCard(job, files, {
       ...(twin ? { approvedTwin: twin.id } : {}),
       ...(auto ? { autoApproval: `${auto.ok ? "yes" : "no"} — ${auto.reason}` } : {}),
       snapshotDir: join(this.store.root, id, "files"),
+      ...(machine ? { scheduler: machine.scheduler } : {}),
     });
   }
 }

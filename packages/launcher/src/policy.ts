@@ -18,6 +18,8 @@ export interface Mount {
   readonly: boolean;
   /** Role paths ending in "/" are directories; others are single files. */
   kind: "dir" | "file";
+  /** A staged directory holding only these role files (read-only file mounts; see prepareMounts). */
+  files?: string[];
 }
 
 export interface ContainerSpec {

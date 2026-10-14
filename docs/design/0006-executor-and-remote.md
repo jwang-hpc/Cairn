@@ -73,3 +73,11 @@ Same executor interface; thresholds may allow auto-approval for small jobs.
 - **Workstation runner:** job in its own process group (perl `setpgrp`) with a wall-clock watchdog; exit code
   and timestamps in `.cairn/` next to the job. Fetch copies only regular, single-link files inside the job
   directory (no symlinks or hard links), ≤ 10 MiB each and 50 MiB per fetch; larger files are referenced.
+- **Hardening after review (M5):** `jobs.submit` reads an agent's experiment **inside its sandbox** (only the
+  worktree is mounted, so no symlink race can reach host files); the host-side reader is for user submissions.
+  Auto-approval also requires the same target. Fetch accepts only the declared outputs and the two logs, framed
+  by a random per-call marker. Workstation cancel is a TERM to the runner (pid captured at launch), which stops its
+  own job group; nothing the job can write decides what gets signalled. A launch that failed ambiguously is
+  looked up (`.cairn/runner.pid`, or `squeue/sacct --name cairn-<job>`) and adopted, never run twice. A scheduler
+  error leaves the state unchanged ("unknown"); `lost` is re-checked on the next status. Cards and CLI output
+  escape control characters; files with NUL bytes are flagged and still scanned.

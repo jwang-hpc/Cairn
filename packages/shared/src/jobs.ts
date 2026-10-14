@@ -49,8 +49,8 @@ export type JobManifest = Type.Static<typeof JobManifest>;
 
 export const JOB_STATES = ["pending_approval", "denied", "approved", "submitted", "running", "completed", "failed", "cancelled", "lost"] as const;
 export type JobState = (typeof JOB_STATES)[number];
-/** States after which the job never changes on the remote side. */
-export const TERMINAL_JOB_STATES: readonly JobState[] = ["denied", "completed", "failed", "cancelled", "lost"];
+/** States after which the job never changes. "lost" is not one: the machine is asked again on the next status. */
+export const TERMINAL_JOB_STATES: readonly JobState[] = ["denied", "completed", "failed", "cancelled"];
 
 /** Who wrote the job: an agent run (model + effort feed provenance) or the user. */
 export type JobAuthor =
