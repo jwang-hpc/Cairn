@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CairnBridge, EngineConnection, Proposal } from "../shared/bridge.js";
 import { api, type Draft, type FileEntry, type PaperNote, type ProjectSummary, type SessionMeta, type Status } from "./api.js";
 import { Composer, type DrawerItem, RecapCard, SessionBar, Thread } from "./chat.js";
-import { Drawer, type DrawerContent } from "./drawer.js";
+import { clampDrawer, DRAWER, Drawer, type DrawerContent, wideDrawer } from "./drawer.js";
 import type { JobAction } from "./jobs.js";
 import { ApprovalsView, LiteratureView, type Outline, problemText, ResultsView, Sidebar } from "./panels.js";
 import { applyEvent, type ChatState, emptyChat, needsYou, recap, upsertProposal } from "./session.js";
@@ -42,6 +42,30 @@ export function App(props: { bridge: CairnBridge }) {
   const [jobBusy, setJobBusy] = useState(false);
   const [gateBusy, setGateBusy] = useState<GateStep>();
   const [drawerError, setDrawerError] = useState<string>();
+  // The drawer's width is the user's: dragged or widened, and remembered on this machine (a convenience only).
+  const [drawerWidth, setDrawerWidth] = useState<number>(() => {
+    try {
+      const w = Number(localStorage.getItem("cairn.drawerWidth"));
+      return w > 0 ? clampDrawer(w, window.innerWidth) : DRAWER.default;
+    } catch {
+      return DRAWER.default;
+    }
+  });
+  /** Set while widened: the width to return to. */
+  const [narrowWidth, setNarrowWidth] = useState<number>();
+  useEffect(() => {
+    if (narrowWidth !== undefined) return; // a widened drawer is not the preference
+    try {
+      localStorage.setItem("cairn.drawerWidth", String(drawerWidth));
+    } catch {
+      // storage unavailable: the width lasts for this window only
+    }
+  }, [drawerWidth, narrowWidth]);
+  useEffect(() => {
+    const fit = () => setDrawerWidth((w) => clampDrawer(w, window.innerWidth));
+    window.addEventListener("resize", fit);
+    return () => window.removeEventListener("resize", fit);
+  }, []);
 
   const projectRef = useRef(project);
   const chatRef = useRef(chat);
@@ -339,7 +363,7 @@ export function App(props: { bridge: CairnBridge }) {
           </button>
         </p>
       )}
-      <div className={`layout${drawer ? "" : " no-drawer"}`}>
+      <div className={`layout${drawer ? "" : " no-drawer"}`} style={drawer ? { gridTemplateColumns: `${DRAWER.sidebar}px minmax(0, 1fr) ${drawerWidth}px` } : undefined}>
         <Sidebar projects={projects} project={project} onProject={setProject} outline={outline} files={files} onOpen={(i) => void open(i)} />
         <section className="center">
           <div className="tabs" role="tablist">
@@ -394,6 +418,21 @@ export function App(props: { bridge: CairnBridge }) {
           item={drawer}
           content={content}
           onClose={() => setDrawer(undefined)}
+          width={drawerWidth}
+          wide={narrowWidth !== undefined}
+          onResize={(w) => {
+            setDrawerWidth(w);
+            setNarrowWidth(undefined);
+          }}
+          onToggleWide={() => {
+            if (narrowWidth !== undefined) {
+              setDrawerWidth(narrowWidth);
+              setNarrowWidth(undefined);
+            } else {
+              setNarrowWidth(drawerWidth);
+              setDrawerWidth(wideDrawer(window.innerWidth));
+            }
+          }}
           job={{ busy: jobBusy, error: drawerError, onAction: (x, t) => void actOnJob(x, t) }}
           gate={{ busy: gateBusy, error: drawerError, onStep: (s, n) => void gateStep(s, n) }}
           onStop={stopFromLog}

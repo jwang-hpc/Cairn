@@ -84,10 +84,53 @@ function FileView(props: { file: FileContent }) {
   return <pre className="card prose">{f.text}</pre>;
 }
 
+/** Drawer width limits: at least 320 px; it leaves the sidebar (240) and 360 px of chat. */
+export const DRAWER = { min: 320, default: 400, sidebar: 240, chatMin: 360 };
+export function clampDrawer(width: number, windowWidth: number): number {
+  const max = Math.max(DRAWER.min, windowWidth - DRAWER.sidebar - DRAWER.chatMin);
+  return Math.round(Math.min(Math.max(width, DRAWER.min), max));
+}
+/** The "Widen" size: two thirds of the window, within the limits. */
+export const wideDrawer = (windowWidth: number) => clampDrawer(Math.round(windowWidth * 0.66), windowWidth);
+
+function ResizeHandle(props: { width: number; onResize: (w: number) => void }) {
+  return (
+    <div
+      className="drawer-resize"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize the preview"
+      aria-valuenow={props.width}
+      tabIndex={0}
+      onPointerDown={(e) => {
+        const el = e.currentTarget;
+        el.setPointerCapture(e.pointerId);
+        const move = (ev: PointerEvent) => props.onResize(clampDrawer(window.innerWidth - ev.clientX, window.innerWidth));
+        const up = () => {
+          el.removeEventListener("pointermove", move);
+          el.removeEventListener("pointerup", up);
+        };
+        el.addEventListener("pointermove", move);
+        el.addEventListener("pointerup", up);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+          e.preventDefault();
+          props.onResize(clampDrawer(props.width + (e.key === "ArrowLeft" ? 40 : -40), window.innerWidth));
+        }
+      }}
+    />
+  );
+}
+
 export function Drawer(props: {
   item: DrawerItem | undefined;
   content: DrawerContent | undefined;
   onClose: () => void;
+  width: number;
+  wide: boolean;
+  onResize: (w: number) => void;
+  onToggleWide: () => void;
   job: { busy: boolean; error: string | undefined; onAction: (a: JobAction, text?: string) => void };
   gate: { busy: GateStep | undefined; error: string | undefined; onStep: (s: GateStep, note?: string) => void };
   onStop: () => void;
@@ -96,8 +139,12 @@ export function Drawer(props: {
   const c = props.content;
   return (
     <aside className="drawer" aria-label="Preview">
+      <ResizeHandle width={props.width} onResize={props.onResize} />
       <div className="drawer-head">
         <span className="drawer-title">{drawerTitle(props.item)}</span>
+        <button type="button" className="btn" onClick={props.onToggleWide} title="Drag the left edge to set any width">
+          {props.wide ? "Narrow" : "Widen"}
+        </button>
         <button type="button" className="btn" onClick={props.onClose}>
           Close
         </button>

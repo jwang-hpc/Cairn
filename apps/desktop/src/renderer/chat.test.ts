@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import type { CairnBridge, EngineRequest, Proposal } from "../shared/bridge.js";
 import { api, type Draft, type SessionView, type TranscriptEntry } from "./api.js";
 import { Composer, ProposalCard, Thread } from "./chat.js";
-import { Drawer, parseCsv } from "./drawer.js";
+import { clampDrawer, Drawer, parseCsv, wideDrawer } from "./drawer.js";
 import { ApprovalsView, LiteratureView, problemText, ResultsView } from "./panels.js";
 import { applyEvent, type ChatState, emptyChat, needsYou, recap, thread, toolSummary } from "./session.js";
 
@@ -99,13 +99,24 @@ describe("panels and drawer", () => {
     expect(ap).toMatch(/Needs you · 3.*20261014-2213-7c1e · EXP-001 → workstation.*Review and decide.*Revised claim.*Take it through the gate.*Hold C01.*Record in ledger/);
   });
 
+  it("the drawer is resizable within limits, and widens to two thirds of the window", () => {
+    expect([clampDrawer(100, 1600), clampDrawer(700, 1600), clampDrawer(1500, 1600)]).toEqual([320, 700, 1000]); // 1600 - 240 sidebar - 360 chat
+    expect(wideDrawer(1600)).toBe(1000);
+    expect(wideDrawer(1200)).toBe(600);
+    expect(clampDrawer(500, 700)).toBe(320); // a small window keeps the minimum
+    const noop = { busy: false, error: undefined, onAction: () => {} };
+    const d = html(createElement(Drawer, { item: { kind: "file", path: "t.csv" }, content: undefined, onClose: () => {}, width: 400, wide: false, onResize: () => {}, onToggleWide: () => {}, job: noop, gate: { busy: undefined, error: undefined, onStep: () => {} }, onStop: () => {} }));
+    expect(d).toMatch(/role="separator" aria-orientation="vertical" aria-label="Resize the preview" aria-valuenow="400" tabindex="0"/);
+    expect(d).toMatch(/>Widen<\/button><button type="button" class="btn">Close</);
+  });
+
   it("parses CSV with quotes, and the drawer renders tables and images", () => {
     expect(parseCsv('n,label\n1,"a, b"\r\n2,"say ""hi"""\n')).toEqual([["n", "label"], ["1", "a, b"], ["2", 'say "hi"']]);
     const noop = { busy: false, error: undefined, onAction: () => {} };
     const gate = { busy: undefined, error: undefined, onStep: () => {} };
-    const table = html(createElement(Drawer, { item: { kind: "file", path: "t.csv" }, content: { kind: "file", file: { path: "t.csv", bytes: 1, kind: "text", text: "n,s\n100000,0.00519\n" } }, onClose: () => {}, job: noop, gate, onStop: () => {} }));
+    const table = html(createElement(Drawer, { item: { kind: "file", path: "t.csv" }, content: { kind: "file", file: { path: "t.csv", bytes: 1, kind: "text", text: "n,s\n100000,0.00519\n" } }, onClose: () => {}, width: 400, wide: false, onResize: () => {}, onToggleWide: () => {}, job: noop, gate, onStop: () => {} }));
     expect(table).toMatch(/<th>n<\/th><th>s<\/th>.*<td class="num">100000<\/td><td class="num">0\.00519<\/td>/);
-    const img = html(createElement(Drawer, { item: { kind: "file", path: "f.svg" }, content: { kind: "file", file: { path: "f.svg", bytes: 1, kind: "image", mime: "image/svg+xml", base64: "PHN2Zy8+" } }, onClose: () => {}, job: noop, gate, onStop: () => {} }));
+    const img = html(createElement(Drawer, { item: { kind: "file", path: "f.svg" }, content: { kind: "file", file: { path: "f.svg", bytes: 1, kind: "image", mime: "image/svg+xml", base64: "PHN2Zy8+" } }, onClose: () => {}, width: 400, wide: false, onResize: () => {}, onToggleWide: () => {}, job: noop, gate, onStop: () => {} }));
     expect(img).toContain('<img class="preview-img" src="data:image/svg+xml;base64,PHN2Zy8+"');
   });
 });
