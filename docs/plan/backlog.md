@@ -96,7 +96,7 @@ and year).
   - Restricted projects: they write nothing to Zotero, and no per-project collection names a restricted project.
 - **Reads:** two routes, both used only by the host engine. Agents can't reach either: their network is pinned
   and blocked by the host firewall.
-  - **Local API** of Zotero desktop: `http://localhost:23119/api/`, read-only, no key. It needs Zotero running and
+  - **Local API** of Zotero desktop: `http://localhost:23119/api/`. Reads need no key. It needs Zotero running and
     "Allow other applications on this computer to communicate with Zotero" turned on. It works offline and sees
     the desktop's local copies of attachments, including WebDAV-synced files.
   - **Web API:** `https://api.zotero.org`, with a read-only key. This is for an engine without Zotero desktop
@@ -107,8 +107,14 @@ and year).
     hold anything. Any paper cited from the library still goes through `literature.resolve` into
     `lit/refs.bib`.
 - **Writes:** never by an agent. Only on a user action: `re literature accept` offers "also add to Zotero?", or a
-  separate `re library add`. Writes go through the Web API to the "Cairn" group only, so Cairn's items stay apart
-  from the user's hand-curated library.
+  separate `re library add`. Writes go to the "Cairn" group only, so Cairn's items stay apart from the user's
+  hand-curated library. Two routes:
+  - **Local API (Zotero 10+):** writes items, notes, and **files** through the desktop, which syncs them afterwards.
+    Every write needs a key granted in a Zotero dialog (Allow / Always Allow / Deny). Requesting a single-use key
+    per accept makes that dialog a human approval at the moment of writing. A local key isn't limited to one
+    library: it can write to any library the user can edit. So "Cairn group only" is enforced by Cairn's code,
+    and a single-use key per write is the safer default.
+  - **Web API:** a key that Zotero itself limits to writing the Cairn group, for an engine without Zotero desktop.
   Before creating an item, Cairn looks the paper up by DOI or arXiv id and attaches its note to an existing item
   rather than making a duplicate.
   - Each Cairn item gets the tag `cairn` and `Citation Key: <citekey>` in Extra (the Better BibTeX convention).
@@ -137,6 +143,12 @@ and year).
     can't write to the personal library, so they can't plant an item to cite. Items Cairn wrote to the "Cairn"
     group don't count as vouched; they were verified by `resolve` anyway.
 - **Decide:**
+  - PDFs for Cairn's items. The library decides where a PDF syncs, not the write route. In the "Cairn" group a PDF
+    goes to Zotero's own storage, under the group owner's quota, because groups can't use WebDAV. Options:
+    attach PDFs there; attach them as linked files (the PDF stays in a local folder, nothing is uploaded, and it is
+    available only on this Mac); or attach none and let the user copy chosen items into their personal library
+    (WebDAV), where Zotero's "Find Available PDF" uses the user's own access. Cairn fetches no PDFs today. Open
+    copies from arXiv or Unpaywall would be new domains to approve.
   - Whether to use Zotero's indexed full text (`qmode=everything`, `/fulltext`) for search.
   - Whether per-project collections are worth the exposure.
 
