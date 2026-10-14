@@ -39,7 +39,8 @@ export const LEDGER_OPTIONS = {
 } as const;
 
 export const LEDGER_USAGE = `project commands (writes are tagged provenance: user, committed to the project repo):
-  project new <name> --title T [--data-class public|unpublished|restricted] [--authors "A, B"]
+  project new <name> --title T --data-class public|unpublished|restricted [--authors "A, B"]
+                                                          (asked if omitted in a terminal; never defaulted)
   project list | project use <name> | project            (show current)
   hypothesis add --title T --statement S --prediction P --falsification F --baseline B
                  --experiment E --kill K [--parent N01]
@@ -58,7 +59,18 @@ type Values = Record<string, string | boolean | undefined>;
 interface Io {
   out(line: string): void;
   err(line: string): void;
+  /** Present only when stdin is a terminal. */
+  ask?(question: string): Promise<string>;
 }
+
+/** What each data class means, as the user is asked it (DR-0013: the class decides which providers may see the data). */
+const DATA_CLASSES: Record<DataClass, string> = {
+  public: "open data: public or open-science datasets, code, and results",
+  unpublished: "not public yet: your own unpublished results, code, or drafts",
+  restricted: "handling requirements: e.g. DOE or export-controlled data, or data under an agreement",
+};
+const DATA_CLASS_HELP = `say whether this project's data is open: --data-class public | unpublished | restricted
+${Object.entries(DATA_CLASSES).map(([k, d]) => `  ${k.padEnd(12)} ${d}`).join("\n")}`;
 
 const expandHome = (p: string) => (p === "~" || p.startsWith("~/") ? join(homedir(), p.slice(1)) : p);
 const list = (s: string | undefined) => (s ?? "").split(/[;,]/).map((x) => x.trim()).filter(Boolean);
@@ -155,9 +167,16 @@ async function dispatch(engine: Engine, command: string, args: string[], v: Valu
     case "project": {
       if (sub === "new") {
         const name = rest[0];
-        if (!name) throw new UsageError("usage: re project new <name> --title T [--data-class C]");
-        need(v, ["title"], "project new <name> --title T");
-        const dc = (v["data-class"] as string | undefined) ?? engine.config.models.projects_default_data_class;
+        if (!name) throw new UsageError("usage: re project new <name> --title T --data-class C");
+        need(v, ["title"], "project new <name> --title T --data-class C");
+        // Asked, never defaulted: the class decides which model providers may receive this project's data.
+        let dc = v["data-class"] as string | undefined;
+        if (dc === undefined) {
+          if (!io.ask) throw new UsageError(DATA_CLASS_HELP);
+          io.out(`Is this project's data open? Its data class decides which model providers may receive it:\n${Object.entries(DATA_CLASSES).map(([k, d]) => `  ${k.padEnd(12)} ${d}`).join("\n")}`);
+          dc = (await io.ask("data class (public, unpublished, or restricted):")).trim().toLowerCase();
+          if (dc === "") throw new UsageError("no data class given; nothing created");
+        }
         if (!["public", "unpublished", "restricted"].includes(dc)) throw new UsageError("--data-class must be public, unpublished, or restricted");
         await mkdir(projectsDir(engine), { recursive: true });
         const l = await Ledger.create({

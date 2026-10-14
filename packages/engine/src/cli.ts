@@ -28,6 +28,8 @@ export interface CliIo {
   write?(chunk: string): void;
   /** Interactive input for `re login`. */
   login?: LoginIo;
+  /** stdin is a terminal: commands may ask questions instead of failing on a missing answer. */
+  interactive?: boolean;
 }
 
 export interface CliDeps {
@@ -153,7 +155,8 @@ export async function runCli(argv: readonly string[], io: CliIo, deps: CliDeps =
   if ((CLAIM_COMMANDS as readonly string[]).includes(command)) return runClaimCommand(engine, rest, v, io, deps.env ?? process.env);
   if ((JOB_COMMANDS as readonly string[]).includes(command)) return runJobCommand(engine, command, rest, v, io, deps.env ?? process.env, deps.jobs);
   if ((LEDGER_COMMANDS as readonly string[]).includes(command)) {
-    return runLedgerCommand(engine, command, rest, v, io, deps.env ?? process.env);
+    const ask = io.interactive && io.login ? { ask: (q: string) => io.login!.ask(q, false) } : {};
+    return runLedgerCommand(engine, command, rest, v, { ...io, ...ask }, deps.env ?? process.env);
   }
 
   switch (command) {
