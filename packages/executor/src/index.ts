@@ -19,3 +19,4 @@ export { AuditLog, type AuditRecord } from "./jobs/audit.js";
 export { renderCard } from "./jobs/card.js";
 export { describeFiles, fingerprint, JobError, JobStore, snapshotExperiment } from "./jobs/store.js";
 export { type JobLedger, JobService, type JobServiceOptions, type SubmitRequest } from "./jobs/service.js";
+export { createExecutorEndpoint, createJobsMcp, describeJob, type ExecutorSession, JOB_TOOLS, type JobTool, type JobsMcp } from "./mcp/jobs.js";

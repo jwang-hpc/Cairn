@@ -38,7 +38,15 @@ export const MessageEvent = Type.Object(
 );
 
 export const ToolCallEvent = Type.Object(
-  { ...envelope, type: Type.Literal("tool_call"), toolCallId: NonEmpty, name: NonEmpty, args: Type.Unknown() },
+  {
+    ...envelope,
+    type: Type.Literal("tool_call"),
+    toolCallId: NonEmpty,
+    name: NonEmpty,
+    args: Type.Unknown(),
+    /** MCP tool name when the call went to the executor (name is the provider-safe alias, e.g. mcp_jobs_submit). */
+    mcp: Type.Optional(NonEmpty),
+  },
   { additionalProperties: false },
 );
 

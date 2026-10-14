@@ -16,11 +16,13 @@ import {
   worktreeDiff,
   type WorktreeRef,
 } from "@cairn/launcher";
-import { type EffortLevel, type UsageEvent, validate, WorkerReport } from "@cairn/shared";
+import type { JobService } from "@cairn/executor";
+import { type DataClass, type EffortLevel, type UsageEvent, validate, WorkerReport } from "@cairn/shared";
 import type { Engine } from "../engine.js";
 import { envelope, readUsage } from "../events/log.js";
 import type { CallSpec } from "../models/layer.js";
 import { clip, confinedTools } from "../tools/confined.js";
+import { connectExecutorTools, type ExecutorTools } from "../tools/executor.js";
 
 /** Task input: plain text, delivered to the agent as /outbox/task.md (TaskSpec is files, not chat). */
 export interface TaskSpec {
@@ -59,12 +61,16 @@ export interface WorkerDeps {
   runtime?: ContainerRuntime;
   /** Injectable for tests; defaults to launchSandbox. */
   launch?: (opts: SandboxOptions) => Promise<Sandbox>;
+  /** The Cairn project the worktree belongs to: its data class governs every model call (invariant 9). */
+  project?: { name: string; dataClass: DataClass };
+  /** Executor jobs service; roles with executor_tools get them only for a project run (DR-0006). */
+  jobs?: JobService;
 }
 
 const DEFAULT_IMAGE = "cairn-agent:dev";
 const DEFAULT_MAX_MINUTES = 15;
 
-function systemPrompt(role: string, sb: Sandbox): string {
+function systemPrompt(role: string, sb: Sandbox, executorTools: string[]): string {
   const mounts = sb.spec.mounts
     .filter((m) => m.target.startsWith("/work/"))
     .map((m) => `  - ${m.target}${m.kind === "dir" ? "/" : ""} (${m.readonly ? "read-only" : "writable"})`)
@@ -83,6 +89,9 @@ function systemPrompt(role: string, sb: Sandbox): string {
     "- /outbox (writable): put artifacts and your final report here.",
     `- Network: ${net}`,
     "- Tools: bash, read, write, edit, python. Commands run as an unprivileged user; root filesystem is read-only.",
+    ...(executorTools.length > 0
+      ? [`- Executor tools: ${executorTools.join(", ")}. They act on real machines outside the sandbox; the user approves every job.`]
+      : []),
     "",
     "When you are finished, write /outbox/report.json as JSON:",
     '  {"status": "done" | "failed" | "needs_input", "summary": "<what you did>", "notes": "<optional>", "questions": ["<optional>"]}',
@@ -139,16 +148,32 @@ export async function runWorker(deps: WorkerDeps, task: TaskSpec, worktree: Work
   let error: string | null = null;
   let agent: Agent | undefined;
   let finalText = "";
+  let executor: ExecutorTools | undefined;
   try {
     const run = await engine.governor.startRun(role, runId);
-    const spec: CallSpec = { alias, effort, role, dataClass: cfg.models.projects_default_data_class, run };
+    const spec: CallSpec = { alias, effort, role, dataClass: deps.project?.dataClass ?? cfg.models.projects_default_data_class, run };
+    if (roleCfg.executor_tools.length > 0 && deps.jobs && deps.project) {
+      const model = cfg.models.models[alias]?.id ?? alias;
+      executor = await connectExecutorTools(deps.jobs, {
+        project: deps.project.name,
+        worktree: worktree.path,
+        branch: worktree.branch,
+        agent: { run: runId, agent: worktree.agentId, role, model, effort },
+        tools: roleCfg.executor_tools,
+      });
+    }
     agent = new Agent({
-      initialState: { systemPrompt: systemPrompt(role, sandbox), model: engine.piModelFor(alias), tools: confinedTools(sandbox.exec) },
+      initialState: {
+        systemPrompt: systemPrompt(role, sandbox, executor?.tools.map((t) => t.name) ?? []),
+        model: engine.piModelFor(alias),
+        tools: [...confinedTools(sandbox.exec), ...(executor?.tools ?? [])],
+      },
       streamFn: engine.layer.streamFn(spec),
     });
     agent.subscribe(async (e) => {
       if (e.type === "tool_execution_start") {
-        await log({ ...envelope(runId, machine), type: "tool_call", toolCallId: e.toolCallId, name: e.toolName, args: e.args ?? null });
+        const mcp = executor?.names.get(e.toolName);
+        await log({ ...envelope(runId, machine), type: "tool_call", toolCallId: e.toolCallId, name: e.toolName, args: e.args ?? null, ...(mcp ? { mcp } : {}) });
       } else if (e.type === "tool_execution_end") {
         await log({
           ...envelope(runId, machine), type: "tool_result", toolCallId: e.toolCallId, name: e.toolName, isError: e.isError, text: clip(resultText(e.result), 4000),
@@ -180,6 +205,7 @@ export async function runWorker(deps: WorkerDeps, task: TaskSpec, worktree: Work
   } catch (e) {
     error = (e as Error).message;
   } finally {
+    await executor?.close();
     await sandbox.close();
   }
 

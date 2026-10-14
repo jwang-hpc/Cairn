@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { EgressEvent, EngineEvent, RolesConfig } from "../../packages/shared/src/index.js";
 import { EventLog, envelope } from "../../packages/engine/src/events/log.js";
-import { type AuditEntry, createFront, serveFront } from "../../packages/executor/src/index.js";
+import { type AuditEntry, createFront, JobService, LocalTransport, serveFront } from "../../packages/executor/src/index.js";
 import {
   ContainerRuntime,
   createWorktree,
@@ -30,7 +30,7 @@ const IMAGE = process.env.CAIRN_AGENT_IMAGE ?? "cairn-agent:dev";
 
 const roles: RolesConfig = {
   roles: {
-    coder: { mounts: { read: ["logic/"], write: ["src/"] }, network: ["pypi.org"], executor_tools: [] },
+    coder: { mounts: { read: ["logic/"], write: ["src/", "experiments/"] }, network: ["pypi.org"], executor_tools: ["jobs.submit"] },
     analysis: { mounts: { read: ["logic/", "evidence/"], write: ["analysis/"] }, network: [], executor_tools: [] },
   },
   defaults: { secrets: "none", egress: "deny" },
@@ -98,6 +98,8 @@ describe.skipIf(!ON)("escape suite (DR-0005)", () => {
     await mkdir(join(repo, "src"), { recursive: true });
     await writeFile(join(repo, "logic", "claims.md"), "# claims\n");
     await writeFile(join(repo, "src", "main.py"), "print(1)\n");
+    await mkdir(join(repo, "experiments"), { recursive: true });
+    await writeFile(join(repo, "experiments", ".gitkeep"), "");
     await symlink(decoy, join(repo, "logic", "leak"));
     await git(repo, ["init", "--quiet", "-b", "main"]);
     await git(repo, ["-c", "user.name=t", "-c", "user.email=t@t", "add", "-A"]);
@@ -143,7 +145,7 @@ describe.skipIf(!ON)("escape suite (DR-0005)", () => {
     const env = await attempt(A, "look for credentials in env", "env");
     expect(env.stdout).not.toMatch(/SSH_AUTH_SOCK|API_KEY|_TOKEN|ANTHROPIC|OPENAI|GITHUB/);
     const mounts = await attempt(A, "list mounts", "grep -E ' (virtiofs|9p|fuse)' /proc/mounts | cut -d' ' -f2");
-    expect(mounts.stdout.trim().split("\n").sort()).toEqual(["/outbox", "/skills", "/work/logic", "/work/src"]);
+    expect(mounts.stdout.trim().split("\n").sort()).toEqual(["/outbox", "/skills", "/work/experiments", "/work/logic", "/work/src"]);
   });
 
   it("2. writes outside the role's writable paths fail and leave the host untouched", async () => {
@@ -219,6 +221,41 @@ describe.skipIf(!ON)("escape suite (DR-0005)", () => {
     expect((await call(`Bearer ${token}`)).status).toBe(200);
     expect(audit.filter((a) => a.event === "reject").map((a) => `${a.status} ${a.reason}`)).toEqual(["401 missing bearer token", "401 invalid bearer token"]);
     expect(JSON.stringify(audit)).not.toContain(token);
+  });
+
+  it("6b. the executor refuses jobs that violate machine policy, including symlinks the agent plants (DR-0006)", async () => {
+    const manifest = (o: Record<string, unknown> = {}) => JSON.stringify({ script: "run.sh", resources: { cores: 1, walltime: "00:01:00", ...o }, outputs: ["results.csv"] });
+    await attempt(A, "write a job that reaches another host, reads a key, and asks for too much", [
+      "mkdir -p /work/experiments/EXP-001",
+      `printf '%s' '${manifest({ nodes: 99 })}' > /work/experiments/EXP-001/job.json`,
+      "printf 'ssh other-host cat ~/.ssh/id_ed25519 > results.csv\\n' > /work/experiments/EXP-001/run.sh",
+    ].join(" && "));
+    await attempt(A, "plant a job script that is a symlink to a host secret", [
+      "mkdir -p /work/experiments/EXP-002",
+      `printf '%s' '${manifest()}' > /work/experiments/EXP-002/job.json`,
+      "ln -s ../../logic/leak/.ssh/id_ed25519 /work/experiments/EXP-002/run.sh",
+    ].join(" && "));
+    await attempt(A, "make an experiment directory a symlink to the host home", "ln -s ../logic/leak /work/experiments/EXP-003");
+    const jobs = new JobService({
+      home,
+      machines: { workstation: { host: "workstation", scheduler: "none", scratch: join(base, "scratch"), max: { cores: 4 } } },
+      transport: () => new LocalTransport(),
+      ledger: async () => ({ write: async () => {} }),
+    });
+    const submit = (experiment: string) =>
+      jobs
+        .submit({ project: "esc", worktree: wtA.path, experiment, target: "workstation", author: { kind: "agent", run: "escape-suite", agent: wtA.agentId, role: "coder", model: "none", effort: "low" } })
+        .then(() => "accepted", (e: Error) => e.message);
+    const first = await submit("EXP-001");
+    expect(first).toMatch(/nodes must be 1, not 99/);
+    expect(first).toMatch(/'ssh' is not allowed/);
+    expect(first).toMatch(/a credential location/);
+    expect(await submit("EXP-002")).toMatch(/run.sh is a symlink; job files must be regular files/);
+    expect(await submit("EXP-003")).toMatch(/experiments\/EXP-003 is not a directory \(symlinks are not followed\)/);
+    expect(await jobs.list()).toEqual([]);
+    const log = await readFile(join(home, "audit.log"), "utf8");
+    expect(log.trim().split("\n").map((l) => JSON.parse(l) as { action: string; ok: boolean }).map((a) => `${a.action} ${a.ok}`)).toEqual(Array(3).fill("submit false"));
+    expect(log).not.toContain(marker);
   });
 
   it("7. the launcher refuses dangerous configurations before the runtime sees them", async () => {
