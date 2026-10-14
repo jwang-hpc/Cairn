@@ -13,3 +13,15 @@ export {
   WORK,
 } from "./policy.js";
 export { type ArgvPolicy, toExecArgv, toRunArgv, UnsafeArgvError, validateRunArgv } from "./argv.js";
+export { MountError, prepareMounts, type PreparedMounts } from "./mounts.js";
+export {
+  type CommandRunner,
+  ContainerRuntime,
+  cliRunner,
+  DEFAULT_MAX_OUTPUT,
+  DEFAULT_TIMEOUT_MS,
+  type NetworkInfo,
+  type RunOptions,
+  type RunResult,
+  RuntimeError,
+} from "./runtime.js";
