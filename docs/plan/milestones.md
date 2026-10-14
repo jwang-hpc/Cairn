@@ -45,6 +45,10 @@ stored and replayable; a restricted-class project is refused by a disallowed pro
 **Amendment (2026-10-14, user decision):** two or more vendors suffice for M4 acceptance (Claude + GPT are
 configured); a third vendor joins once its key and data terms are settled (open questions 7, 8). Until then the
 synthesizer is a model outside the panel (DR-0013) but may share a vendor with a member; that is recorded.
+**Status (2026-10-14): done** (M4.1–M4.3). `scripts/acceptance-m4.sh`: independent → critique → synthesis over HY01
+with Claude Sonnet + GPT (synth Claude Opus), 5 calls, stored in `engine/panels/<id>/` and replayed blind; a
+restricted project was refused by both providers (2 approval-denied events, 0 model calls). Synthesizer is not yet
+vendor-neutral (open questions 7/8).
 
 ## M5 — Executor (host MCP servers)
 jobs.submit/status/fetch_results/cancel with linting against machines.yaml and approval requests;
