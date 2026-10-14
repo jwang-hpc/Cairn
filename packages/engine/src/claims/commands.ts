@@ -9,6 +9,7 @@ import { type Ledger, LedgerError } from "../ledger/ledger.js";
 import { parseDraft } from "./draft.js";
 import { ledgerReader } from "./reader.js";
 import type { EffortLevel, SupportReport } from "@cairn/shared";
+import { listDrafts } from "./drafts.js";
 import { reviewDraft } from "./gate.js";
 import { renderReview } from "./review.js";
 import { checkSupport, renderReport } from "./support.js";
@@ -25,7 +26,8 @@ export const CLAIM_USAGE = `claim commands (nothing reaches logic/claims.md with
                                      3. your approval: re-checks support, needs a review of this exact draft,
                                         writes the claim to logic/claims.md as C<nn> (user-revised; --own if
                                         you wrote the draft yourself: user)
-  claim list                         claims in logic/claims.md`;
+  claim list                         claims in logic/claims.md
+  claim drafts                       drafts committed on the project's branches, and where each stands`;
 
 type Values = Record<string, string | boolean | undefined>;
 
@@ -72,9 +74,27 @@ interface Io {
 
 export async function runClaimCommand(engine: Engine, args: string[], v: Values, io: Io, env: NodeJS.ProcessEnv): Promise<number> {
   const [sub, file] = args;
-  if (!["check", "review", "approve", "list"].includes(sub ?? "")) {
+  if (!["check", "review", "approve", "list", "drafts"].includes(sub ?? "")) {
     io.err(`re claim: unknown subcommand '${sub ?? ""}'\n${CLAIM_USAGE}`);
     return 2;
+  }
+  if (sub === "drafts") {
+    try {
+      const ledger = await openCurrentProject(engine, v, env);
+      const drafts = await listDrafts(ledger);
+      if (drafts.length === 0) io.out(`(no claim drafts on the branches of ${ledger.name})`);
+      for (const d of drafts) {
+        const where = d.approved ? `approved as ${d.approved.claim}` : d.review ? `reviewed: ${d.review.verdict}` : "not reviewed";
+        io.out(`${d.ref}  [${where}]  ${d.title}`);
+      }
+      return 0;
+    } catch (e) {
+      if (e instanceof LedgerError) {
+        io.err(`re claim: ${e.message}`);
+        return 1;
+      }
+      throw e;
+    }
   }
   if (sub === "list") {
     try {

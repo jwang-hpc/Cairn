@@ -5,9 +5,10 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { CairnBridge, EngineRequest } from "../shared/bridge.js";
-import { api } from "./api.js";
+import { api, type Draft } from "./api.js";
+import { gateState, sortDrafts } from "./claims.js";
 import { actionsFor, ago, groupJobs } from "./jobs.js";
-import { Header, JobDetail, JobInbox } from "./views.js";
+import { ClaimsList, DraftDetail, Header, JobDetail, JobInbox, LedgerView } from "./views.js";
 
 const job = (over: Partial<JobRecord>): JobRecord =>
   ({
@@ -112,13 +113,53 @@ describe("api (over window.cairn)", () => {
     );
     const sent: EngineRequest[] = [];
     const bridge: CairnBridge = {
-      request: async (r) => (sent.push(r), { status: 200, body: { job: {}, jobs: [], projects: [] } }),
+      request: async (r) => (sent.push(r), { status: 200, body: { job: {}, jobs: [], projects: [], drafts: [], claims: [], hypotheses: [], decisions: [], text: "" } }),
       connection: async () => ({ state: "connecting", detail: "" }),
       reconnect: async () => ({ state: "connecting", detail: "" }),
       subscribe: () => () => {},
     };
     const a = api(bridge);
     await Promise.all([a.status(), a.projects(), a.jobs("p"), a.job("j"), a.approve("j"), a.deny("j", "r"), a.submit("j"), a.refresh("j"), a.cancel("j"), a.fetch("j")]);
+    await Promise.all([a.drafts("p"), a.claims("p"), a.check("p", "b:staging/claims/x.md"), a.review("p", "b:staging/claims/x.md"), a.approveClaim("p", "b:staging/claims/x.md")]);
+    await Promise.all([a.hypotheses("p"), a.tree("p"), a.decisions("p")]);
+    expect(sent.find((r) => r.path === "/api/claims/approve")).toEqual({ method: "POST", path: "/api/claims/approve", body: { project: "p", ref: "b:staging/claims/x.md" } });
     for (const r of sent) expect(routes.some((re) => re.test(`${r.method} ${r.path.split("?")[0]}`)), `${r.method} ${r.path}`).toBe(true);
+  });
+});
+
+const draft = (over: Partial<Draft> = {}): Draft => ({ ref: "agent/analysis-1:staging/claims/sieve.md", branch: "agent/analysis-1", title: "Sieve time grows linearly", sha256: "a".repeat(64), md: "## C??: Sieve time grows linearly\n", ...over });
+const REVIEW = { verdict: "revise" as const, summary: "thin", reviewer: "rev (r1, high)", at: "2026-10-14T20:00:00Z", text: "rigor review: REVISE — rev" };
+
+describe("claim gate in the app (DR-0007)", () => {
+  it("approval needs a review of this exact draft; an approved draft is done", () => {
+    expect(gateState(draft())).toMatchObject({ stage: "not reviewed", canCheck: true, canReview: true, canApprove: false });
+    expect(gateState(draft({ review: REVIEW }))).toMatchObject({ stage: "reviewed", canApprove: true, label: "reviewed: revise" });
+    expect(gateState(draft({ review: REVIEW, approved: { claim: "C01", at: "2026-10-14T21:00:00Z", by: "user-revised" } }))).toMatchObject({ stage: "approved", canCheck: false, canApprove: false, label: "approved as C01" });
+    const order = sortDrafts([draft({ ref: "a:x", approved: { claim: "C01", at: "x", by: "user-revised" } }), draft({ ref: "b:x" }), draft({ ref: "c:x", review: REVIEW })]).map((d) => d.ref);
+    expect(order).toEqual(["c:x", "b:x", "a:x"]); // reviewed (ready for your decision), not reviewed, approved
+  });
+
+  it("the draft view offers the three steps; approve is disabled until a review is on file", () => {
+    const html = (d: Draft) => renderToStaticMarkup(createElement(DraftDetail, { draft: d, check: { ok: false, text: "support check: FAILED" }, review: undefined, busy: undefined, error: undefined, onStep: () => {} }));
+    const fresh = html(draft());
+    expect(fresh).toContain("1. Support check");
+    expect(fresh).toContain("2. Rigor review");
+    expect(fresh).toMatch(/<button type="button" class="primary" disabled="" title="Approval needs a rigor review of this exact draft">3\. Approve…<\/button>/);
+    expect(fresh).toContain('<pre class="card failed">support check: FAILED</pre>');
+    expect(fresh).toContain("## C??: Sieve time grows linearly");
+    expect(html(draft({ review: REVIEW }))).toMatch(/2\. Review again.*<button type="button" class="primary" title="">3\. Approve…/);
+    const done = html(draft({ review: REVIEW, approved: { claim: "C01", at: "2026-10-14T21:00:00Z", by: "user-revised" } }));
+    expect(done).toContain("approved as C01 (user-revised, 2026-10-14)");
+    expect(done).not.toContain("1. Support check");
+  });
+
+  it("lists drafts and claims, and the ledger", () => {
+    const list = renderToStaticMarkup(createElement(ClaimsList, { drafts: [draft({ review: REVIEW })], claims: [{ id: "C01", title: "Linear", fields: { Status: "supported", Provenance: "user-revised" } }], selected: undefined, onSelect: () => {}, onRefresh: () => {} }));
+    expect(list).toMatch(/reviewed: revise.*Sieve time grows linearly.*agent\/analysis-1:staging\/claims\/sieve\.md/);
+    expect(list).toMatch(/C01.*Linear.*supported · user-revised/);
+    const ledger = renderToStaticMarkup(createElement(LedgerView, { hypotheses: [{ id: "HY01", title: "SZ3 helps", statement: "s", status: "approved", provenance: "user" }], tree: "N01 question", decisions: [{ id: "D01", title: "Approve HY01", fields: {} }] }));
+    expect(ledger).toMatch(/HY01.*SZ3 helps.*approved · user/);
+    expect(ledger).toContain("N01 question");
+    expect(ledger).toContain("D01");
   });
 });

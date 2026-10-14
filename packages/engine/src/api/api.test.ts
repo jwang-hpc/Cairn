@@ -356,6 +356,22 @@ describe("the claim gate (check → review → approve)", () => {
     expect((await post("/api/claims/check", {})).status).toBe(400);
   });
 
+  it("drafts: what the agents committed, and where each stands (not reviewed → reviewed → approved)", async () => {
+    expect((await get("/api/projects/demo/drafts")).body).toEqual({ project: "demo", drafts: [] });
+    await branchDraft(demo, claim());
+    const listed = async () => (await get("/api/projects/demo/drafts")).body.drafts as Json[];
+    expect(await listed()).toEqual([
+      { ref: BRANCH_REF, branch: "agent/analysis-1", title: "Pure-Python sieve time grows about linearly with N", sha256: expect.stringMatching(/^[0-9a-f]{64}$/), md: claim() },
+    ]);
+    await post("/api/claims/review", { ref: BRANCH_REF });
+    expect((await listed())[0]).toMatchObject({ review: { verdict: "revise", summary: "Supported numerically, thin method.", reviewer: "rev-m (r1, high)", text: expect.stringMatching(/^rigor review: REVISE/) } });
+    expect((await listed())[0]!.approved).toBeUndefined();
+    await post("/api/claims/approve", { ref: BRANCH_REF, note: "ok" });
+    expect((await listed())[0]).toMatchObject({ approved: { claim: "C01", by: "user-revised" } });
+    expect((await re("claim", "drafts")).out).toBe(`${BRANCH_REF}  [approved as C01]  Pure-Python sieve time grows about linearly with N`);
+    expect((await get("/api/projects/nope/drafts")).status).toBe(404);
+  });
+
   it("review needs a passing check; approve needs a review of this exact draft", async () => {
     const wrong = claim().replace("9592 primes below", "9593 primes below");
     const refused = await post("/api/claims/review", { draft: wrong });

@@ -13,6 +13,7 @@ import { JobError, type JobService, type JobServiceOptions } from "@cairn/execut
 import { EFFORT_LEVELS, type EffortLevel } from "@cairn/shared";
 import { BudgetExceededError, type DailyTotals } from "../budget/governor.js";
 import { approveDraft, BRANCH_DRAFT, checkDraft, readBranchDraft } from "../claims/commands.js";
+import { listDrafts } from "../claims/drafts.js";
 import { reviewDraft } from "../claims/gate.js";
 import { renderReview, ReviewerError } from "../claims/review.js";
 import { renderReport } from "../claims/support.js";
@@ -227,6 +228,10 @@ export function createApi(engine: Engine, opts: ApiOptions = {}): Api {
     ["GET", "/api/projects/:name/claims", async (c) => {
       const l = await openCurrentProject(engine, { project: c.params[0]! }, env);
       return { project: l.name, claims: await l.claims() };
+    }],
+    ["GET", "/api/projects/:name/drafts", async (c) => {
+      const l = await openCurrentProject(engine, { project: c.params[0]! }, env);
+      return { project: l.name, drafts: await listDrafts(l) };
     }],
     ["GET", "/api/projects/:name/decisions", async (c) => {
       const l = await openCurrentProject(engine, { project: c.params[0]! }, env);
