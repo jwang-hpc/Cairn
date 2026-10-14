@@ -89,7 +89,17 @@ Acceptance: the M5 and M6 flows can be completed entirely from the app.
   claims, decisions), jobs (list, card, approve, deny, submit, cancel, refresh, fetch), machines, panels (list,
   blind show, judge), the claim gate (check, review, approve), and `GET /api/events`; each wraps the functions the
   CLI uses. Tested socketless through `handle(Request)`; the socket test skips where binding a port is refused.
-- Open: the Electron + React app itself, Keychain via safeStorage, notifications, signing + notarization.
+- **M8.2 app shell and job inbox: implemented (2026-10-14).** `apps/desktop`: Electron + React over the engine API
+  (DR-0002 amendment).
+  - It connects to (or starts) `re serve` and shows the engine's state and today's spend against the cap.
+  - It lists projects, and shows a project's jobs grouped by what they need: waiting for approval, in progress,
+    finished.
+  - A job's approval card, with the actions `re job` allows: approve (which launches), deny with a reason, start,
+    refresh, cancel, fetch results. Live updates come from `GET /api/events`.
+  - Tests cover the engine connection, request checks, the event-stream parser, the views, and a route contract
+    with the engine API. Opening a real window is checked by hand.
+- Open: claims and ledger views (the M6 flow, M8.3); panels; notifications; Keychain via safeStorage; signing and
+  notarization.
 
 ## M9 — Campaigns and async
 Campaign spec + runner (scheduler-native arrays/dependencies or headless engine on workstation);

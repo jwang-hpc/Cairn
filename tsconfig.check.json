@@ -9,6 +9,9 @@
   },
   "include": [
     "packages/*/src/**/*.ts",
+    "apps/desktop/src/main/**/*.ts",
+    "apps/desktop/src/preload/**/*.cts",
+    "apps/desktop/src/shared/**/*.ts",
     "tests/escape/**/*.ts",
     "vitest.config.ts"
   ]

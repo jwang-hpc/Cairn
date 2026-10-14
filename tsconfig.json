@@ -12,6 +12,9 @@
     },
     {
       "path": "packages/engine"
+    },
+    {
+      "path": "apps/desktop/tsconfig.main.json"
     }
   ]
 }

@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.renderer.json",
+  "compilerOptions": {
+    "types": [
+      "vite/client",
+      "node"
+    ]
+  },
+  "include": [
+    "src/renderer",
+    "src/shared"
+  ],
+  "exclude": []
+}
