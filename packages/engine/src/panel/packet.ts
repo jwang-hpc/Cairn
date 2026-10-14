@@ -1,6 +1,6 @@
 // The context packet: identical input for every panel member (DR-0008), built from ledger files only.
 import { createHash } from "node:crypto";
-import type { Ledger } from "../ledger/ledger.js";
+import { type Ledger, LedgerError } from "../ledger/ledger.js";
 
 export interface Packet {
   /** Markdown given to every member. */
@@ -27,7 +27,7 @@ export async function buildPacket(ledger: Ledger, opts: { hypothesis?: string; e
   add("Project manifest", "PAPER.md", await ledger.read("PAPER.md"));
   if (opts.hypothesis) {
     const h = (await ledger.hypotheses()).find((x) => x.id === opts.hypothesis);
-    if (!h) throw new Error(`unknown hypothesis ${opts.hypothesis}`);
+    if (!h) throw new LedgerError(`unknown hypothesis ${opts.hypothesis}`);
     add(
       `Hypothesis under review: ${h.id}`,
       "logic/hypotheses.md",
