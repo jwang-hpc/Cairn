@@ -1,35 +1,12 @@
-// jobs.* as an MCP server (DR-0006, DR-0004 seam 4) for one agent session: the session fixes the project, the
-// worktree, the author, and which tools the role may use (roles.yaml executor_tools). Approval is out-of-band
-// (seam 5, spike 2 F2): jobs.submit returns pending_approval and the agent polls jobs.status. No MCP tool can
-// approve anything. The server sits behind the authenticated front (bearer token, Host, path).
-import { randomUUID } from "node:crypto";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
-import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import { EXPERIMENT_PATTERN, JOB_ID_PATTERN, type EffortLevel, type JobRecord, type MachineConfig } from "@cairn/shared";
-import { createFront } from "../front.js";
+// jobs.* tools (DR-0006): submit, status, fetch_results, cancel for the session's project and worktree. Approval is
+// out-of-band (seam 5, spike 2 F2): jobs.submit returns pending_approval and the agent polls jobs.status.
+import { EXPERIMENT_PATTERN, JOB_ID_PATTERN, type JobRecord, type MachineConfig } from "@cairn/shared";
 import type { JobService } from "../jobs/service.js";
-import type { JobFileContent } from "../jobs/lint.js";
 import { JobError } from "../jobs/store.js";
+import { createExecutorMcp, type ExecutorMcp, type ExecutorSession, fail, ok, type ToolDef, type ToolResult, type ToolSet } from "./server.js";
 
 export const JOB_TOOLS = ["jobs.submit", "jobs.status", "jobs.fetch_results", "jobs.cancel"] as const;
 export type JobTool = (typeof JOB_TOOLS)[number];
-
-export interface ExecutorSession {
-  project: string;
-  /** Host path of the agent's worktree (never sent to the model). */
-  worktree: string;
-  branch?: string;
-  agent: { run: string; agent: string; role: string; model: string; effort: EffortLevel };
-  /** roles.yaml executor_tools for the agent's role. */
-  tools: readonly string[];
-  /** Reads experiments/<name>/ inside the agent's sandbox (see SubmitRequest.read). */
-  read?: (experiment: string) => Promise<JobFileContent[]>;
-}
-
-type ToolResult = { content: { type: "text"; text: string }[]; isError?: boolean };
-const ok = (text: string): ToolResult => ({ content: [{ type: "text", text }] });
-const fail = (text: string): ToolResult => ({ content: [{ type: "text", text }], isError: true });
 
 function machineLine(name: string, m: MachineConfig): string {
   const limits = [
@@ -98,7 +75,7 @@ function toolDefs(machines: Record<string, MachineConfig>) {
       description: "Withdraw a job that is waiting for approval, or stop a running one.",
       inputSchema: { type: "object", properties: { job_id: { type: "string", pattern: JOB_ID_PATTERN } }, required: ["job_id"], additionalProperties: false },
     },
-  } satisfies Record<JobTool, unknown>;
+  } satisfies Record<JobTool, ToolDef>;
 }
 
 /** What the agent sees about a job: state, what happens next, nothing about hosts' filesystems beyond the job. */
@@ -127,19 +104,12 @@ export function describeJob(j: JobRecord): string {
   }
 }
 
-export interface JobsMcp {
-  handle(request: Request): Promise<Response>;
-  close(): Promise<void>;
-}
-
-export function createJobsMcp(service: JobService, session: ExecutorSession): JobsMcp {
+/** The jobs.* tool set for one agent session. */
+export function jobTools(service: JobService, session: ExecutorSession): ToolSet {
   const machines = service.opts.machines;
   const defs = toolDefs(machines);
-  const allowed = JOB_TOOLS.filter((t) => session.tools.includes(t));
   const actor = `agent:${session.agent.agent}`;
   const author = { kind: "agent" as const, ...session.agent };
-  const audit = (tool: string, okFlag: boolean, detail: string) =>
-    service.audit.append({ actor, project: session.project, action: `tool ${tool}`, ok: okFlag, detail });
 
   const mine = async (id: unknown): Promise<JobRecord> => {
     if (typeof id !== "string" || !new RegExp(JOB_ID_PATTERN).test(id)) throw new JobError(`job_id must look like 20261014-0300-ab12, not ${JSON.stringify(id)}`);
@@ -198,75 +168,10 @@ export function createJobsMcp(service: JobService, session: ExecutorSession): Jo
     return fail(`unknown tool ${name}`);
   }
 
-  function server(): Server {
-    const s = new Server({ name: "cairn-executor-jobs", version: "0.0.0" }, { capabilities: { tools: {} } });
-    s.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: allowed.map((t) => defs[t]) }));
-    s.setRequestHandler(CallToolRequestSchema, async (req) => {
-      const { name, arguments: args = {} } = req.params;
-      if (!(allowed as readonly string[]).includes(name)) {
-        await audit(name, false, `not allowed for role ${session.agent.role}`);
-        return fail(`${name} is not available to the ${session.agent.role} role`);
-      }
-      try {
-        const r = await call(name, args);
-        await audit(name, true, JSON.stringify(args));
-        return r;
-      } catch (e) {
-        await audit(name, false, `${JSON.stringify(args)}: ${(e as Error).message}`);
-        if (e instanceof JobError) return fail((e as Error).message);
-        return fail(`executor error: ${(e as Error).message}`);
-      }
-    });
-    return s;
-  }
-
-  const sessions = new Map<string, WebStandardStreamableHTTPServerTransport>();
-  return {
-    async handle(request) {
-      const sid = request.headers.get("mcp-session-id");
-      let transport = sid ? sessions.get(sid) : undefined;
-      if (sid && !transport) return new Response(JSON.stringify({ error: "unknown session" }), { status: 404, headers: { "content-type": "application/json" } });
-      if (!transport) {
-        const t = new WebStandardStreamableHTTPServerTransport({
-          sessionIdGenerator: () => randomUUID(),
-          onsessioninitialized: (id) => void sessions.set(id, t),
-          onsessionclosed: (id) => void sessions.delete(id),
-        });
-        await server().connect(t);
-        transport = t;
-      }
-      return transport.handleRequest(request);
-    },
-    async close() {
-      for (const t of sessions.values()) await t.close();
-      sessions.clear();
-    },
-  };
+  return { defs: JOB_TOOLS.map((t) => defs[t]), call, expected: (e) => e instanceof JobError };
 }
 
-/**
- * One agent's executor endpoint: the authenticated front (per-session bearer token, Host, path) in front of the
- * jobs MCP server. In-process: `fetch` goes straight to the front, no socket (spike 2 F5); serveFront() can put the
- * same front on a loopback port later.
- */
-export function createExecutorEndpoint(opts: { service: JobService; session: ExecutorSession; token: string }): {
-  fetch: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
-  close(): Promise<void>;
-} {
-  const mcp = createJobsMcp(opts.service, opts.session);
-  const front = createFront({
-    token: opts.token,
-    handler: (r) => mcp.handle(r),
-    onAudit: (e) => {
-      if (e.event === "reject") {
-        void opts.service.audit
-          .append({ actor: "http", project: opts.session.project, action: "http", ok: false, detail: `${e.status} ${e.reason} (${e.method} ${e.path})` })
-          .catch(() => {});
-      }
-    },
-  });
-  return {
-    fetch: (input, init) => front.handle(input instanceof Request ? input : new Request(input, init)),
-    close: () => mcp.close(),
-  };
+/** An MCP server with only the jobs.* tools (tests and callers that need nothing else). */
+export function createJobsMcp(service: JobService, session: ExecutorSession): ExecutorMcp {
+  return createExecutorMcp([jobTools(service, session)], session, service.audit);
 }

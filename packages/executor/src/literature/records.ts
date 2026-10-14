@@ -153,6 +153,9 @@ export function bibValue(s: string): string {
     .replace(/~/g, "\\~{}");
 }
 
+/** A DOI as written in a BibTeX doi field: only characters that need no escaping. */
+export const bibDoi = (doi: string) => doi.replace(/[^A-Za-z0-9._;()/:<>-]/g, "");
+
 export function toBibtex(r: PaperRecord, key: string): string {
   if (!/^[a-z0-9]+$/.test(key)) throw new Error(`bad citekey ${key}`);
   const kind = r.kind ?? "";
@@ -162,7 +165,7 @@ export function toBibtex(r: PaperRecord, key: string): string {
     ["author", r.authors.length ? r.authors.map((a) => bibValue(a)).join(" and ") : undefined],
     ["year", r.year ? String(r.year) : undefined],
     [type === "inproceedings" ? "booktitle" : "journal", type === "misc" ? undefined : r.venue ? bibValue(r.venue) : undefined],
-    ["doi", r.ids.doi && !arxivFromDoi(r.ids.doi) ? r.ids.doi.replace(/[^A-Za-z0-9._;()/:<>-]/g, "") : undefined],
+    ["doi", r.ids.doi && !arxivFromDoi(r.ids.doi) ? bibDoi(r.ids.doi) : undefined],
     ["eprint", r.ids.arxiv],
     ["archivePrefix", r.ids.arxiv ? "arXiv" : undefined],
     ["url", r.ids.doi && !arxivFromDoi(r.ids.doi) ? `https://doi.org/${encodeURI(r.ids.doi)}` : r.ids.arxiv ? `https://arxiv.org/abs/${r.ids.arxiv}` : undefined],
