@@ -134,7 +134,22 @@ Acceptance: the M5 and M6 flows can be completed entirely from the app.
     sessions, messages, proposals, and run steps, and live session events on `GET /api/events`.
   - Acceptance pending (the user, from a terminal): ask about C01's review, launch a proposal, see the worker's
     steps and outcome, resume the chat later.
-- **Next (DR-0014, accepted):** a chat-centred app.
+- **M8.5 the chat-centred app: implemented (2026-10-14).** Built on M8.4.
+  - **Layout:** a left sidebar with projects, the outline (problem, claims, hypotheses, exploration tree), and files.
+    Centre tabs Chat | Literature | Results | Approvals; the Approvals badge counts what needs the user. A preview
+    drawer shows files, figures, tables, job cards (approve, deny), claim drafts (the gate), claims, and worker
+    logs (stop).
+  - **Chat:** one continuing chat per project plus New chat, and a recap built from the cards and the project.
+    Answers stream with tool use folded and a time and cost footer. Messages typed while the orchestrator answers
+    queue.
+  - **Cards and activity:** proposal and worker cards show the live step, the folded steps, and the outcome with
+    links. An activity strip shows the running workers.
+  - **Engine additions:** `GET /api/projects/:name/files`, `/file` (text, images, and PDFs as base64; 10 MiB
+    limit), and `/literature`.
+  - **Not yet in the app:** literature check and accept (CLI only), paper preview (M8.6), PDF preview, and
+    rendered Markdown (shown as plain text).
+- **Next:** M8.6 paper preview; then blind panel comparison, notifications, Keychain via safeStorage, signing and
+  notarization.
   - M8.4: orchestrator sessions in the engine, and `re chat`.
   - M8.5: the chat layout, with Outline, Approvals, Results, and Literature panels.
   - M8.6: paper preview.
