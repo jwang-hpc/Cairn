@@ -148,6 +148,12 @@ Acceptance: the M5 and M6 flows can be completed entirely from the app.
     limit), and `/literature`.
   - **Not yet in the app:** literature check and accept (CLI only), paper preview (M8.6), PDF preview, and
     rendered Markdown (shown as plain text).
+- **UI follow-ups, after the prototype is complete** (the user's call, 2026-10-16):
+  - render the orchestrator's Markdown (bold, lists, code) instead of plain text;
+  - show a card after the answer that proposed it, not before;
+  - recap: failed or stopped tasks under "Next", not "Done";
+  - worker errors in one plain sentence (not the raw JSON twice), with what to do;
+  - notes rendered as Markdown in the drawer, and PDF preview.
 - **Next:** M8.6 paper preview; then blind panel comparison, notifications, Keychain via safeStorage, signing and
   notarization.
   - M8.4: orchestrator sessions in the engine, and `re chat`.
