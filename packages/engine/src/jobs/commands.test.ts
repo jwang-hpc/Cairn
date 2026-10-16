@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LocalTransport } from "@cairn/executor";
@@ -86,6 +86,38 @@ describe("re job / re machine (DR-0006: agents propose, you approve)", () => {
     expect(await re("job", "show", "20260101-0000-dead")).toMatchObject({ code: 1, err: "re job: no job 20260101-0000-dead" });
     expect(await re("job", "show")).toMatchObject({ code: 1, err: "re job: usage: re job show <id>" });
     expect((await re("job", "frob")).code).toBe(2);
+  });
+
+  it("you propose a campaign yourself; reconcile checks unfinished jobs and fetches the finished campaign once", async () => {
+    const exp = join(root, "projects/demo/experiments/EXP-002");
+    await mkdir(exp, { recursive: true });
+    await writeFile(join(exp, "run.sh"), 'printf "sq\\n%s\\n" "$((P_n * P_n))" > out.csv\n');
+    await writeFile(
+      join(exp, "job.json"),
+      JSON.stringify({ script: "run.sh", resources: { cores: 2, walltime: "00:05:00" }, outputs: ["out.csv"], campaign: { parameters: { n: [1, 2, 3] }, point_walltime: "00:00:30", parallel: 2 } }),
+    );
+    expect(await re("job", "propose", "EXP-002")).toMatchObject({ code: 1, err: "re job: usage: re job propose <EXP-NNN> --target <machine>" });
+    expect(await re("job", "reconcile")).toMatchObject({ code: 0, out: "(nothing to reconcile)" });
+    const p = await re("job", "propose", "EXP-002", "--target", "workstation");
+    const id = /^proposed (\S+): EXP-002 → workstation \(campaign: 3 points\), pending_approval$/m.exec(p.out)?.[1];
+    expect(id).toBeDefined();
+    expect(p.out).toContain(`review: re job show ${id}   then: re job approve ${id}`); // a campaign never auto-approves
+    expect((await re("job", "show", id!)).out).toContain("runs unattended once approved; no model in the loop (DR-0011)");
+    expect((await re("job", "list")).out).toMatch(new RegExp(`^${id}  pending_approval\\s+EXP-002 → workstation\\s+you`));
+    expect((await re("job", "approve", id!)).code).toBe(0);
+
+    let r = await re("job", "reconcile");
+    for (let i = 0; i < 100 && !/^fetched/m.test(r.out); i++) {
+      expect(r.out).toMatch(new RegExp(`^checked  ${id}  running`));
+      await new Promise((res) => setTimeout(res, 100));
+      r = await re("job", "reconcile");
+    }
+    expect(r.out.split("\n")).toEqual([
+      expect.stringMatching(new RegExp(`^checked  ${id}  completed  EXP-002 → workstation  \\(.*3 of 3 points done\\)$`)),
+      `fetched  ${id}  5 files into evidence/raw/EXP-002/${id}`,
+    ]);
+    expect(await readFile(join(root, `projects/demo/evidence/raw/EXP-002/${id}/campaign-out.csv`), "utf8")).toBe("point,n,sq\n0,1,1\n1,2,4\n2,3,9\n");
+    expect(await re("job", "reconcile")).toMatchObject({ code: 0, out: "(nothing to reconcile)" });
   });
 
   it("machine list shows sessions and missing scratch", async () => {

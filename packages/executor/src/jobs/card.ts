@@ -17,6 +17,8 @@ export function printable(text: string, multiline = false): string {
 }
 const fmtBytes = (n: number) => (n < 1024 ? `${n} B` : n < 1 << 20 ? `${(n / 1024).toFixed(1)} KiB` : `${(n / (1 << 20)).toFixed(1)} MiB`);
 
+const hms = (s: number) => `${String(Math.floor(s / 3600)).padStart(2, "0")}:${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+
 export function renderCard(
   job: JobRecord,
   files: JobFileContent[],
@@ -32,7 +34,15 @@ export function renderCard(
     `resources:   ${lint.nodes} node${lint.nodes === 1 ? "" : "s"} × ${lint.cores} core${lint.cores === 1 ? "" : "s"}${lint.gpus ? `, ${lint.gpus} GPU${lint.gpus === 1 ? "" : "s"}/node` : ""}${manifest.resources.memory_gb ? `, ${manifest.resources.memory_gb} GB/node` : ""}, walltime ${manifest.resources.walltime} (${lint.node_hours} node-hours)`,
     ...(lint.account || lint.partition ? [`scheduler:   ${[lint.account ? `account ${lint.account}` : "", lint.partition ? `partition ${lint.partition}` : ""].filter(Boolean).join(", ")}`] : []),
     `pre-flight:  ${job.preflight ? `${job.preflight.ok ? "ok" : "REFUSED"}: ${job.preflight.detail}` : opts.scheduler === "none" ? "none (no scheduler on this machine)" : "not run (no SSH session at submit time)"}`,
-    `outputs:     ${manifest.outputs.join(", ") || "(none declared)"}`,
+    ...(manifest.campaign && lint.campaign
+      ? [
+          `campaign:    ${lint.campaign.points} points (${Object.entries(manifest.campaign.parameters).map(([k, v]) => `${k} × ${v.length}`).join(", ")}), ${lint.campaign.parallel} at a time, ${lint.campaign.retries} retr${lint.campaign.retries === 1 ? "y" : "ies"} per point`,
+          `             each point ≤ ${manifest.campaign.point_walltime}; budget ${manifest.resources.walltime} (the grid needs about ${hms(lint.campaign.estimate_s)})`,
+          ...Object.entries(manifest.campaign.parameters).map(([k, v]) => `             ${k}: ${v.join(", ")}`),
+          "             runs unattended once approved; no model in the loop (DR-0011)",
+        ]
+      : []),
+    `outputs:     ${manifest.outputs.join(", ") || "(none declared)"}${manifest.campaign ? " (per point; plus campaign.csv and merged CSVs)" : ""}`,
     `fingerprint: ${job.fingerprint.slice(0, 16)}${opts.approvedTwin ? ` (identical to approved job ${opts.approvedTwin})` : " (new files)"}`,
     ...(opts.autoApproval ? [`auto:        ${opts.autoApproval}`] : []),
     lint.warnings.length > 0 ? `lint:        ${lint.warnings.length} warning(s) — review:` : "lint:        no warnings",

@@ -351,6 +351,11 @@ export function createApi(engine: Engine, opts: ApiOptions = {}): Api {
       return { project: p ?? null, jobs: await jobs.list(p ? { project: p } : {}) };
     }],
     ["GET", "/api/jobs/:id", async (c) => ({ job: await jobs.get(job(c)), card: await jobs.card(job(c)) })],
+    ["POST", "/api/jobs/reconcile", async (c) => {
+      const p = optString(await c.body(), "project");
+      const project = p !== undefined ? (await openCurrentProject(engine, { project: p }, env)).name : undefined;
+      return await jobs.reconcile(project ? { project } : {});
+    }],
     ["POST", "/api/jobs/:id/approve", async (c) => ({ job: await jobs.approve(job(c), optString(await c.body(), "note")) })],
     ["POST", "/api/jobs/:id/deny", async (c) => ({ job: await jobs.deny(job(c), needString(await c.body(), "reason", "a denial needs a reason (it goes back to the agent)")) })],
     ["POST", "/api/jobs/:id/submit", async (c) => ({ job: await jobs.launch(job(c)) })],

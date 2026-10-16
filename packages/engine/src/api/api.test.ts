@@ -313,6 +313,9 @@ describe("jobs (re job / re machine): agents propose, the user approves", () => 
     const fetched = (await post(`/api/jobs/${job.id}/fetch`)).body.job;
     expect(fetched.results).toMatchObject({ dir: `evidence/raw/EXP-001/${job.id}`, files: ["results.csv"], missing: ["absent.csv"] });
     expect(await readFile(join(demo.dir, `evidence/raw/EXP-001/${job.id}/results.csv`), "utf8")).toBe("7\n");
+    // Reconcile (the app calls it on connect): nothing unfinished, and a finished non-campaign job is fetched only on request.
+    expect(await post("/api/jobs/reconcile", { project: "demo" })).toEqual({ status: 200, body: { checked: [], fetched: [], unreachable: [] } });
+    expect((await post("/api/jobs/reconcile", { project: "ghost" })).status).toBe(404);
   });
 
   it("deny and cancel; unknown and malformed ids are 404", async () => {

@@ -3,6 +3,7 @@
 // no remote access, no privilege changes, nothing that outlives the job, no destructive commands outside the job
 // directory, no paths outside the machine's project/scratch areas.
 import {
+  CAMPAIGN_MAX_POINTS,
   JOB_FILE_PATTERN,
   type JobLint,
   JobManifest as JobManifestSchema,
@@ -10,6 +11,7 @@ import {
   type MachineConfig,
   validate,
 } from "@cairn/shared";
+import { pointCount } from "./campaign.js";
 
 export const MANIFEST_FILE = "job.json";
 export const LIMITS = { files: 100, fileBytes: 1 << 20, totalBytes: 4 << 20 } as const;
@@ -131,9 +133,38 @@ export function lintJob({ target, machine, files }: LintInput): LintOutcome {
     if (shell) scanShell(f.path, text, { target, roots }, errors, warnings);
   }
 
+  // Campaigns (DR-0011): a grid of points within the job's walltime, which is the whole campaign's budget.
+  let campaign: JobLint["campaign"];
+  if (manifest.campaign) {
+    const c = manifest.campaign;
+    const points = pointCount(c);
+    const parallel = c.parallel ?? 1;
+    const retries = c.retries ?? 0;
+    const point_walltime_s = walltimeSeconds(c.point_walltime);
+    const estimate_s = Math.ceil(points / parallel) * point_walltime_s;
+    campaign = { points, parallel, retries, point_walltime_s, estimate_s };
+    if (machine.scheduler !== "none") errors.push(`campaigns run on machines without a scheduler for now (${target} uses ${machine.scheduler}; Slurm job arrays come next)`);
+    if (points === 0) errors.push("campaign.parameters is empty");
+    if (points > CAMPAIGN_MAX_POINTS) errors.push(`campaign has ${points} points (at most ${CAMPAIGN_MAX_POINTS})`);
+    if (parallel > r.cores) errors.push(`campaign.parallel ${parallel} exceeds the job's ${r.cores} cores`);
+    if (point_walltime_s === 0) errors.push("campaign.point_walltime must be more than 00:00:00");
+    if (point_walltime_s + 30 > walltime_s) errors.push(`campaign.point_walltime ${c.point_walltime} does not fit the campaign's budget (resources.walltime ${r.walltime})`);
+    if (points * manifest.outputs.length > 2000) errors.push(`${points} points × ${manifest.outputs.length} outputs is more than the 2000 files a fetch collects`);
+    // A point's outputs must come from its own run: nothing pre-made in points/, and no declared output among the
+    // files copied into every point (a failed point would seem to have produced it).
+    for (const f of files) {
+      if (f.path === "campaign.csv" || f.path.startsWith("points/") || /^campaign-[^/]*\.csv$/i.test(f.path)) errors.push(`${f.path}: the campaign writes this path; rename the file`);
+      else if (manifest.outputs.includes(f.path)) errors.push(`${f.path} is a declared output; a copy in every point would pass for that point's result`);
+    }
+    if (estimate_s > walltime_s) {
+      warnings.push(`the budget (walltime ${r.walltime}) covers about ${Math.floor(walltime_s / point_walltime_s) * parallel} of ${points} points at their limit; the campaign starts no point it could not finish`);
+    }
+  }
+
   const lint: JobLint = {
     errors,
     warnings,
+    ...(campaign ? { campaign } : {}),
     nodes,
     cores: r.cores,
     gpus,
@@ -151,6 +182,7 @@ export function lintJob({ target, machine, files }: LintInput): LintOutcome {
  */
 export function autoApproval(target: string, machine: MachineConfig, lint: JobLint, approvedBefore: boolean): { ok: boolean; reason: string } {
   if (machine.doe) return { ok: false, reason: `${target} is a DOE machine: always needs your approval` };
+  if (lint.campaign) return { ok: false, reason: "a campaign is always approved by you (DR-0011)" };
   const t = machine.auto_approve_below;
   if (!t || (t.cores === undefined && t.hours === undefined && t.node_hours === undefined)) return { ok: false, reason: `${target} has no auto-approval threshold` };
   if (lint.errors.length > 0) return { ok: false, reason: "lint errors" };

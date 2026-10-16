@@ -165,6 +165,21 @@ Acceptance: the M5 and M6 flows can be completed entirely from the app.
 Campaign spec + runner (scheduler-native arrays/dependencies or headless engine on workstation);
 reconcile-on-wake; optional workstation poller.
 Acceptance: a 20-point sweep runs on the workstation while the laptop sleeps; results reconciled on wake.
+- **M9.1 campaigns on the workstation, reconcile on wake: implemented (2026-10-16).** DR-0011 amendment proposed.
+  - **Spec:** a `campaign` section in the experiment's `job.json`: a parameter grid (each combination is a point,
+    at most 1000), `point_walltime`, `parallel`, and `retries`. `resources.walltime` is the campaign's budget.
+    It goes through `jobs.submit`, lint, and the approval card like any job. It never auto-approves.
+  - **Run:** a generated, deterministic bash driver inside the workstation runner, with no model. Each point
+    gets its own directory and `P_<name>` variables, runs under a time limit, and is retried on failure. No point
+    starts that the budget could not finish. Status shows "N of M points done, K not ok".
+  - **Results:** `campaign.csv` (one row per point) and each CSV output merged across points, fetched into
+    `evidence/raw/` with every point's outputs.
+  - **CLI and API:** `re job propose <EXP> --target T` (a job you wrote), `re job reconcile [--all]`, and
+    `POST /api/jobs/reconcile`.
+  - **Acceptance pending** (the user, on the VPN): `sh scripts/acceptance-m9.sh` runs a 20-point Monte Carlo
+    sweep while the laptop sleeps, then reconciles on wake.
+  - **Next:** Slurm job arrays for campaigns on HPC; notifications when a campaign finishes (with the notify
+    server); the app calls reconcile when it connects.
 
 ## M10 — Evals and hybrid decision
 Golden task suite in evals/; run current models; evaluate adding a Claude Code / Codex worker behind the
