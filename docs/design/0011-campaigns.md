@@ -1,5 +1,5 @@
 # DR-0011: Campaigns (parameter sweeps)
-Status: Accepted (2026-10-13); amendment proposed (2026-10-16)
+Status: Accepted (2026-10-13); amendments proposed (2026-10-16, 2026-10-18)
 
 The only autonomous mode. A campaign spec is approved once, then runs without the user.
 
@@ -55,3 +55,28 @@ These implementation choices differ from the text above. Merging the M9.1 PR acc
   - The user reopens the session (the human gate) and runs reconcile again.
 - **Notification:** not yet. It comes with the notify MCP server (the rest of M8). Meanwhile the approval card
   shows the expected duration.
+
+## Amendment (2026-10-18, proposed with M9.2): campaigns on Slurm are job arrays
+Merging the M9.2 PR accepts this.
+- **One job array per campaign:** one task per point (`--array=0-<N-1>%<parallel>`). Each task gets the job's
+  resources (nodes, cores, GPUs, memory) and runs `.cairn/point.sh <index>`. That script uses the same per-point
+  code as the workstation driver: a fresh point directory, `P_<name>` variables, a time limit per attempt, and
+  retries. A requeued task starts its point over.
+- **Budget:** `resources.walltime` is a deadline from submission (`--deadline=now+<walltime>`), queue waits
+  included. Slurm starts no task that could not finish by then. Those points show as `not run` and fail the
+  campaign, like skipped points on a workstation.
+  - A task's limit is every attempt plus a minute: `(retries + 1) × point_walltime + 60 s`. It must fit the
+    machine's `max.walltime` and the deadline.
+  - The deadline itself may exceed one job's `max.walltime`.
+  - The card shows the node-hour ceiling the approval allows: points × nodes × task limit.
+- **Status:** the array's tasks are counted by state (squeue, then sacct), with the points' progress from their
+  result files.
+  - Running while any task runs; completed when every task completed; cancelled if any was cancelled.
+  - Otherwise failed: a failed point, or one removed at the deadline.
+  - `scancel` stops the whole array.
+- **Summary at fetch:** the summary (`campaign.csv`, the merged CSVs) runs again at every fetch, on the workstation
+  too. It runs from host-generated text, never from a file in the job directory, which the job could have
+  rewritten. On Slurm this is the only summary (no extra job waits in the queue for it). A cancelled workstation
+  campaign gets one as well.
+- **Not verified on a real cluster yet:** `--deadline` with arrays, and `--test-only` pre-flight of an array
+  (Slurm 24.11). The M9 acceptance on `uncc-hpc` checks both.

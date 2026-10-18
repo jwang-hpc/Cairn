@@ -1,15 +1,16 @@
 #!/bin/sh
 # M9 acceptance: a 20-point sweep runs on the workstation while the laptop sleeps; results are reconciled on wake.
 # Run in your own terminal, on the VPN. No model is called: you write the campaign, approve it, and sleep the laptop.
-#   sh scripts/ssh-master.sh open <ssh-alias>      # first: your SSH session to the workstation (the human gate)
-#   sh scripts/acceptance-m9.sh [target]           # default: workstation (a machine without a scheduler)
-# Uses project m9-sweep (PROJECT=<name> for another); asks before replacing an existing one.
+#   sh scripts/ssh-master.sh open <ssh-alias>      # first: your SSH session to the machine (the human gate)
+#   sh scripts/acceptance-m9.sh [target]           # default: workstation; a Slurm machine (e.g. uncc-hpc) runs the
+#                                                  # sweep as one job array
+# Uses project m9-sweep, or m9-<target> for other machines (PROJECT=<name> for another); asks before replacing one.
 set -eu
 cd "$(dirname "$0")/.."
 unset CAIRN_PROJECT
 re() { node packages/engine/dist/bin.js "$@"; }
 TARGET="${1:-workstation}"
-PROJECT="${PROJECT:-m9-sweep}"
+if [ -z "${PROJECT:-}" ]; then PROJECT="m9-sweep"; [ "$TARGET" = workstation ] || PROJECT="m9-$TARGET"; fi
 OUT="$(mktemp "${TMPDIR:-/tmp}/cairn-m9.XXXXXX")"
 trap 'rm -f "$OUT"' EXIT
 [ -t 0 ] || { echo "FAIL: run this in a terminal (it asks you to approve and to sleep the laptop)" >&2; exit 1; }
@@ -17,6 +18,12 @@ trap 'rm -f "$OUT"' EXIT
 echo "== machines"
 re machine list | tee "$OUT"
 HOST="$(sed -n "s/^$TARGET  *ssh \([^ ]*\) .*/\1/p" "$OUT" | head -n 1)"
+SCHED="$(sed -n "s/^$TARGET  *ssh [^ ]*  *\([a-z]*\) .*/\1/p" "$OUT" | head -n 1)"
+case "$SCHED" in
+  none) CORES=4; BUDGET=00:30:00 ;;   # the points share the job's cores; the walltime is the campaign's budget
+  slurm) CORES=1; BUDGET=04:00:00 ;;  # one core per array task; the walltime is a deadline, queue waits included
+  *) echo "FAIL: $TARGET is not a machine in machines.yaml, or its scheduler ($SCHED) has no campaigns" >&2; exit 1 ;;
+esac
 grep -q "^$TARGET .*session open" "$OUT" || { echo "FAIL: no open session to $TARGET (sh scripts/ssh-master.sh open ${HOST:-<alias>})" >&2; exit 1; }
 if grep -q "^$TARGET .*NO SCRATCH" "$OUT"; then echo "FAIL: set machines.$TARGET.scratch in config/machines.yaml" >&2; exit 1; fi
 
@@ -51,11 +58,11 @@ BEGIN {
   printf "pi,abs_error\n%.6f,%.6f\n", pi, err
 }
 EOF
-cat > "$PROJ/experiments/EXP-001/job.json" <<'EOF'
+cat > "$PROJ/experiments/EXP-001/job.json" <<EOF
 {
   "script": "run.sh",
   "description": "M9 acceptance: Monte Carlo pi over 5 sample sizes x 4 seeds (20 points)",
-  "resources": { "cores": 4, "walltime": "00:30:00" },
+  "resources": { "cores": $CORES, "walltime": "$BUDGET" },
   "outputs": ["results.csv"],
   "campaign": {
     "parameters": { "samples": [20000, 40000, 80000, 160000, 320000], "seed": [1, 2, 3, 4] },
@@ -82,8 +89,9 @@ re job status "$ID"
 cat <<EOF
 
 == now sleep the laptop
-The campaign takes about 5 minutes (20 points, 4 at a time, about 50 s each).
+The campaign takes about 5 minutes (20 points, 4 at a time, about 50 s each)$( [ "$SCHED" = slurm ] && echo ", after any wait in the queue")".
 Close the lid (or Apple menu > Sleep) for at least 5 minutes, then wake the laptop and press Enter here.
+(Without sleeping: close the SSH session instead, sh scripts/ssh-master.sh close $HOST, and reopen it when asked.)
 EOF
 printf 'Press Enter to start; sleep the laptop now ... '
 read -r _ || true

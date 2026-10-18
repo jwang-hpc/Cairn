@@ -182,8 +182,17 @@ Acceptance: a 20-point sweep runs on the workstation while the laptop sleeps; re
     - `re ledger check` failed on the uncommitted `experiments/`. Fixed: `re job propose` now commits the
       experiment.
     - To re-run with a real sleep: `sh scripts/acceptance-m9.sh`.
-  - **Next:** Slurm job arrays for campaigns on HPC; notifications when a campaign finishes (with the notify
-    server); the app calls reconcile when it connects.
+- **M9.2 campaigns on Slurm (job arrays): implemented (2026-10-18).** DR-0011 amendment proposed.
+  - **One job array per campaign:** one task per point, at most `parallel` at once, each with the job's resources
+    and a limit of every attempt plus a minute. The campaign's walltime becomes a `--deadline`.
+  - **The card:** the array, the deadline, and the node-hour ceiling (points × nodes × task limit).
+  - **Status:** counts the tasks by state, plus "N of M points done".
+  - **Summary:** rebuilt at every fetch from host-generated text, so Slurm and cancelled campaigns get
+    `campaign.csv` and the merged CSVs too.
+  - **Acceptance pending:** `sh scripts/acceptance-m9.sh uncc-hpc`. It is the first real test of `--deadline` and
+    of array pre-flight on Slurm 24.11.
+  - **Next:** notifications when a campaign finishes (with the notify server); the app calls reconcile when it
+    connects.
 
 ## M10 — Evals and hybrid decision
 Golden task suite in evals/; run current models; evaluate adding a Claude Code / Codex worker behind the

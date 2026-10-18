@@ -29,7 +29,7 @@ let transport: Switchable;
 
 const machines = (): Record<string, MachineConfig> => ({
   workstation: { host: "workstation", scheduler: "none", scratch, max: { cores: 8, walltime: "01:00:00" }, auto_approve_below: { cores: 32, hours: 4 } },
-  hpc: { host: "hpc", scheduler: "slurm", scratch },
+  hpc: { host: "hpc", scheduler: "slurm", scratch, partitions: ["batch"], max: { walltime: "04:00:00" } },
 });
 const service = () =>
   new JobService({
@@ -81,7 +81,21 @@ describe("campaign grid and lint (DR-0011)", () => {
     const tight = lintJob({ target: "workstation", machine: machines().workstation!, files: files({ ...base, resources: { cores: 1, walltime: "00:05:00" }, campaign: { parameters: { n: [1, 2, 3, 4] }, point_walltime: "00:02:00" } }) });
     expect(tight.lint.warnings).toContain("the budget (walltime 00:05:00) covers about 2 of 4 points at their limit; the campaign starts no point it could not finish");
     const bad = (m: object, target = "workstation") => lintJob({ target, machine: machines()[target]!, files: files({ ...base, ...m }) }).lint.errors;
-    expect(bad({ campaign: { parameters: { n: [1] }, point_walltime: "00:01:00" } }, "hpc")).toContain("campaigns run on machines without a scheduler for now (hpc uses slurm; Slurm job arrays come next)");
+    // Slurm: each point is an array task with the job's resources, and the walltime is a deadline from submission.
+    const slurm = (m: object) => lintJob({ target: "hpc", machine: machines().hpc!, files: files({ ...base, ...m }) }).lint;
+    const arr = slurm({ resources: { cores: 2, walltime: "24:00:00" }, campaign: { parameters: { n: [1, 2, 3, 4] }, point_walltime: "01:00:00", parallel: 8, retries: 1 } });
+    expect(arr.errors).toEqual([]); // more tasks at once than cores, and a deadline beyond one job's max: both fine
+    expect(arr.campaign).toEqual({ points: 4, parallel: 8, retries: 1, point_walltime_s: 3600, estimate_s: 3600, task_walltime_s: 7260 });
+    expect(arr.node_hours).toBe(8.067); // the most the approval allows: 4 tasks × 1 node × 2 h 1 min
+    expect(slurm({ resources: { cores: 1, walltime: "12:00:00" }, campaign: { parameters: { n: [1] }, point_walltime: "02:00:00", retries: 1 } }).errors).toEqual([
+      "a point's array task (04:01:00: 2 attempts of 02:00:00 plus a minute) exceeds hpc max 04:00:00",
+    ]);
+    expect(slurm({ campaign: { parameters: { n: [1] }, point_walltime: "00:10:00" } }).errors).toEqual([
+      "a point's array task (00:11:00: 1 attempt of 00:10:00 plus a minute) does not fit the campaign's deadline (resources.walltime 00:10:00)",
+    ]);
+    expect(lintJob({ target: "pbs", machine: { host: "p", scheduler: "pbs", scratch }, files: files({ ...base, campaign: { parameters: { n: [1] }, point_walltime: "00:01:00" } }) }).lint.errors).toContain(
+      "campaigns run on workstations and Slurm machines (pbs uses pbs)",
+    );
     expect(bad({ campaign: { parameters: { n: [1] }, point_walltime: "00:01:00", parallel: 4 } })).toContain("campaign.parallel 4 exceeds the job's 2 cores");
     expect(bad({ campaign: { parameters: { n: [1] }, point_walltime: "00:10:00" } })).toContain("campaign.point_walltime 00:10:00 does not fit the campaign's budget (resources.walltime 00:10:00)");
     expect(bad({ campaign: { parameters: { a: Array.from({ length: 40 }, (_, i) => i), b: Array.from({ length: 40 }, (_, i) => i) }, point_walltime: "00:00:01" } })).toContain("campaign has 1600 points (at most 1000)");
@@ -93,6 +107,22 @@ describe("campaign grid and lint (DR-0011)", () => {
     expect(planted("campaign.csv")).toEqual(["campaign.csv: the campaign writes this path; rename the file"]);
     expect(planted("results.csv")).toEqual(["results.csv is a declared output; a copy in every point would pass for that point's result"]);
     expect(planted("inputs/results.csv")).toEqual([]);
+  });
+});
+
+describe("the approval card", () => {
+  it("shows a Slurm campaign as a job array with a deadline and the most node-hours it may use", async () => {
+    const d = join(worktree, "experiments", "EXP-003");
+    await mkdir(d, { recursive: true });
+    await writeFile(join(d, "run.sh"), "echo ok > results.csv\n");
+    await writeFile(join(d, "job.json"), JSON.stringify({ ...base, resources: { cores: 2, walltime: "24:00:00" }, campaign: { parameters: { n: [1, 2, 3, 4] }, point_walltime: "01:00:00", parallel: 8, retries: 1 } }));
+    const svc = service();
+    const { job, auto } = await svc.submit({ project: "demo", worktree, experiment: "EXP-003", target: "hpc", author: { kind: "user" } });
+    expect(auto.ok).toBe(false);
+    const card = (await svc.card(job.id)).split("\n");
+    expect(card).toContain("resources:   per point: 1 node × 2 cores, deadline 24:00:00 after submission (at most 8.067 node-hours if every task runs to its limit)");
+    expect(card).toContain("campaign:    4 points (n × 4), a Slurm job array: 8 at a time, 1 retry per point");
+    expect(card).toContain("             each point ≤ 01:00:00 (task limit 02:01:00); without queue waits the grid needs about 01:00:00");
   });
 });
 

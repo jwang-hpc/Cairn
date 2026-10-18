@@ -9,6 +9,7 @@ import {
   fetchScript,
   jobDir,
   parseFetch,
+  parseArrayStatus,
   parseRejection,
   parseSlurmStatus,
   parseWorkstationStatus,
@@ -249,6 +250,16 @@ describe("parsers", () => {
     expect(parseSlurmStatus({ squeue_rc: "1", squeue: "slurm_load_jobs error: Socket timed out on send/recv operation" }).state).toBe("unknown");
     expect(parseSlurmStatus({ squeue_rc: "1", squeue: "slurm_load_jobs error: Invalid job id specified", sacct_rc: "1", sacct: "sacct: error" }).state).toBe("unknown");
     expect(parseSlurmStatus({ squeue_rc: "1", squeue: "slurm_load_jobs error: Invalid job id specified", sacct_rc: "0", sacct: "COMPLETED|0:0" }).state).toBe("completed");
+    // Job arrays (campaigns): tasks counted by state.
+    const arr = (f: Record<string, string>) => parseArrayStatus(f, 20);
+    expect(arr({ squeue_rc: "0", squeue: "16 PENDING" })).toEqual({ state: "submitted", detail: "squeue: 16 pending" });
+    expect(arr({ squeue_rc: "0", squeue: "4 PENDING;4 RUNNING", points_done: "12", points_ok: "11" })).toEqual({ state: "running", detail: "squeue: 4 pending, 4 running · 12 of 20 points done, 1 not ok" });
+    expect(arr({ squeue_rc: "0", squeue: "", sacct_rc: "0", sacct: "20 COMPLETED" }).state).toBe("completed");
+    expect(arr({ squeue_rc: "0", squeue: "", sacct_rc: "0", sacct: "18 COMPLETED;2 DEADLINE" })).toEqual({ state: "failed", detail: "sacct: 18 completed, 2 deadline" });
+    expect(arr({ squeue_rc: "0", squeue: "", sacct_rc: "0", sacct: "5 CANCELLED;3 COMPLETED;1 FAILED" }).state).toBe("cancelled");
+    expect(arr({ squeue_rc: "1", squeue: "slurm_load_jobs error: Socket timed out" }).state).toBe("unknown");
+    expect(arr({ squeue_rc: "1", squeue: "slurm_load_jobs error: Invalid job id specified", sacct_rc: "1", sacct: "sacct: error" }).state).toBe("unknown");
+    expect(arr({ squeue_rc: "0", squeue: "", sacct_rc: "0", sacct: "" }).state).toBe("lost");
   });
 });
 
@@ -346,5 +357,56 @@ describe("SlurmRunner (fake Slurm on PATH)", () => {
     await runner.cancel(k, kid);
     expect(await runner.status(k, kid)).toMatchObject({ state: "cancelled" });
     await expect(runner.status(k, "1; rm -rf ~")).rejects.toThrow(/Slurm job id/);
+  });
+
+  it("a campaign is one job array: a task per point, the budget as a deadline; status counts tasks and points; fetch summarizes", async () => {
+    const script = 'if [ "$P_n" = 3 ]; then exit 4; fi\nprintf "sq\\n%s\\n" "$((P_n * P_n))" > results.csv\n';
+    const campaign = { parameters: { n: [1, 2, 3] }, point_walltime: "00:00:30", parallel: 2, retries: 1 };
+    const j = remoteJob(script, { m: hpc(), resources: { cores: 2, walltime: "02:00:00" }, manifest: { campaign } });
+    expect(j.lint.errors).toEqual([]);
+    expect(sbatchScript(j).split("\n").filter((l) => l.startsWith("#SBATCH") || l.startsWith("bash"))).toEqual([
+      `#SBATCH --job-name=cairn-${j.id}`,
+      "#SBATCH --array=0-2%2",
+      "#SBATCH --account=acct1",
+      "#SBATCH --partition=Orion",
+      "#SBATCH --nodes=1",
+      "#SBATCH --ntasks-per-node=2",
+      "#SBATCH --cpus-per-task=1",
+      "#SBATCH --time=00:02:00", // two attempts of 30 s, plus a minute
+      "#SBATCH --deadline=now+7200",
+      `#SBATCH --chdir=${j.dir}`,
+      `#SBATCH --output=${j.dir}/.cairn/task-%a.out`,
+      `#SBATCH --error=${j.dir}/.cairn/task-%a.err`,
+      'bash .cairn/point.sh "$SLURM_ARRAY_TASK_ID"',
+    ]);
+    const { id } = await runner.start(j);
+    await writeFile(join(state, `${id}.squeue`), "RUNNING\nRUNNING\nPENDING\n");
+    expect(await runner.status(j, id)).toMatchObject({ state: "running", detail: "squeue: 1 pending, 2 running · 0 of 3 points done" });
+
+    // Slurm runs each task in the job directory with its index.
+    const task = (i: string) => {
+      try {
+        execFileSync("bash", [".cairn/job.sbatch"], { cwd: j.dir, env: { ...process.env, SLURM_ARRAY_TASK_ID: i }, stdio: "pipe" });
+        return 0;
+      } catch (e) {
+        return (e as { status: number }).status;
+      }
+    };
+    expect([task("0"), task("1"), task("2")]).toEqual([0, 0, 1]);
+    expect([task("7"), task("1;true"), task("")]).toEqual([2, 2, 2]);
+    await rm(join(state, `${id}.squeue`));
+    await writeFile(join(state, `${id}.sacct`), "COMPLETED|0:0\nCOMPLETED|0:0\nFAILED|1:0\n");
+    expect(await runner.status(j, id)).toMatchObject({ state: "failed", detail: "sacct: 2 completed, 1 failed · 3 of 3 points done, 1 not ok" });
+
+    // The summary at fetch comes from the host, replacing whatever the job left at its paths.
+    await writeFile(join(j.dir, "campaign.csv"), "forged\n");
+    const f = await runner.fetch(j);
+    const text = (p: string) => f.files.find((x) => x.path === p)?.content.toString();
+    expect(text("campaign.csv")).toMatch(/^point,n,status,exit,attempts,seconds\n0,1,ok,0,1,\d+\n1,2,ok,0,1,\d+\n2,3,failed,4,2,\d+\n$/);
+    expect(text("campaign-results.csv")).toBe("point,n,sq\n0,1,1\n1,2,4\n");
+    expect(f.files.map((x) => x.path).sort()).toEqual(["campaign-results.csv", "campaign.csv", "points/0000/results.csv", "points/0001/results.csv"]);
+    expect(f.missing).toEqual(["points/0002/results.csv"]);
+    await runner.cancel(j, id);
+    expect(await runner.status(j, id)).toMatchObject({ state: "cancelled" });
   });
 });

@@ -106,7 +106,8 @@ export interface JobLint {
   partition?: string;
   account?: string;
   /** For a campaign: its size and the time the grid needs at that parallelism (no retries). */
-  campaign?: { points: number; parallel: number; retries: number; point_walltime_s: number; estimate_s: number };
+  /** estimate_s: the grid at its point limits, without queue waits; task_walltime_s: a Slurm array task's limit. */
+  campaign?: { points: number; parallel: number; retries: number; point_walltime_s: number; estimate_s: number; task_walltime_s?: number };
 }
 
 export interface JobRecord {
