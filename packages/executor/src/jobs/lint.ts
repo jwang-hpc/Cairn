@@ -11,7 +11,7 @@ import {
   type MachineConfig,
   validate,
 } from "@cairn/shared";
-import { pointCount } from "./campaign.js";
+import { pointCount, taskWalltimeS } from "./campaign.js";
 
 export const MANIFEST_FILE = "job.json";
 export const LIMITS = { files: 100, fileBytes: 1 << 20, totalBytes: 4 << 20 } as const;
@@ -32,6 +32,9 @@ export interface LintOutcome {
   lint: JobLint;
   manifest: JobManifest | undefined;
 }
+
+/** Seconds as HH:MM:SS (hours may exceed 24), the walltime format. */
+export const hms = (s: number) => `${String(Math.floor(s / 3600)).padStart(2, "0")}:${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
 
 export const walltimeSeconds = (w: string): number => {
   const [h = 0, m = 0, s = 0] = w.split(":").map(Number);
@@ -94,7 +97,9 @@ export function lintJob({ target, machine, files }: LintInput): LintOutcome {
   if (max.nodes !== undefined && nodes > max.nodes) errors.push(`nodes ${nodes} exceeds ${target} max ${max.nodes}`);
   if (max.cores !== undefined && r.cores > max.cores) errors.push(`cores ${r.cores} exceeds ${target} max ${max.cores} per node`);
   if (max.gpus !== undefined && gpus > max.gpus) errors.push(`gpus ${gpus} exceeds ${target} max ${max.gpus} per node`);
-  if (max.walltime !== undefined && walltime_s > walltimeSeconds(max.walltime)) errors.push(`walltime ${r.walltime} exceeds ${target} max ${max.walltime}`);
+  // A Slurm campaign's walltime is its deadline, not one job's limit: each array task is checked below instead.
+  const slurmCampaign = machine.scheduler === "slurm" && manifest.campaign !== undefined;
+  if (!slurmCampaign && max.walltime !== undefined && walltime_s > walltimeSeconds(max.walltime)) errors.push(`walltime ${r.walltime} exceeds ${target} max ${max.walltime}`);
   if (walltime_s === 0) errors.push("walltime must be more than 00:00:00");
   if (r.tasks_per_node !== undefined) {
     if (machine.scheduler !== "slurm") errors.push("tasks_per_node applies to Slurm machines only");
@@ -133,8 +138,10 @@ export function lintJob({ target, machine, files }: LintInput): LintOutcome {
     if (shell) scanShell(f.path, text, { target, roots }, errors, warnings);
   }
 
-  // Campaigns (DR-0011): a grid of points within the job's walltime, which is the whole campaign's budget.
+  // Campaigns (DR-0011). On a workstation the points share the job's cores and its walltime is the budget; on Slurm
+  // each point is an array task with the job's resources, and the walltime is a deadline from submission.
   let campaign: JobLint["campaign"];
+  let node_hours = Math.round(nodes * (walltime_s / 3600) * 1000) / 1000;
   if (manifest.campaign) {
     const c = manifest.campaign;
     const points = pointCount(c);
@@ -143,12 +150,23 @@ export function lintJob({ target, machine, files }: LintInput): LintOutcome {
     const point_walltime_s = walltimeSeconds(c.point_walltime);
     const estimate_s = Math.ceil(points / parallel) * point_walltime_s;
     campaign = { points, parallel, retries, point_walltime_s, estimate_s };
-    if (machine.scheduler !== "none") errors.push(`campaigns run on machines without a scheduler for now (${target} uses ${machine.scheduler}; Slurm job arrays come next)`);
     if (points === 0) errors.push("campaign.parameters is empty");
     if (points > CAMPAIGN_MAX_POINTS) errors.push(`campaign has ${points} points (at most ${CAMPAIGN_MAX_POINTS})`);
-    if (parallel > r.cores) errors.push(`campaign.parallel ${parallel} exceeds the job's ${r.cores} cores`);
     if (point_walltime_s === 0) errors.push("campaign.point_walltime must be more than 00:00:00");
-    if (point_walltime_s + 30 > walltime_s) errors.push(`campaign.point_walltime ${c.point_walltime} does not fit the campaign's budget (resources.walltime ${r.walltime})`);
+    if (machine.scheduler === "none") {
+      if (parallel > r.cores) errors.push(`campaign.parallel ${parallel} exceeds the job's ${r.cores} cores`);
+      if (point_walltime_s + 30 > walltime_s) errors.push(`campaign.point_walltime ${c.point_walltime} does not fit the campaign's budget (resources.walltime ${r.walltime})`);
+    } else if (machine.scheduler === "slurm") {
+      const task_walltime_s = taskWalltimeS(point_walltime_s, retries);
+      campaign.task_walltime_s = task_walltime_s;
+      const task = `a point's array task (${hms(task_walltime_s)}: ${retries + 1} attempt${retries ? "s" : ""} of ${c.point_walltime} plus a minute)`;
+      if (max.walltime !== undefined && task_walltime_s > walltimeSeconds(max.walltime)) errors.push(`${task} exceeds ${target} max ${max.walltime}`);
+      if (task_walltime_s > walltime_s) errors.push(`${task} does not fit the campaign's deadline (resources.walltime ${r.walltime})`);
+      // The most the approval allows: every task running to its limit.
+      node_hours = Math.round(points * nodes * (task_walltime_s / 3600) * 1000) / 1000;
+    } else {
+      errors.push(`campaigns run on workstations and Slurm machines (${target} uses ${machine.scheduler})`);
+    }
     if (points * manifest.outputs.length > 2000) errors.push(`${points} points × ${manifest.outputs.length} outputs is more than the 2000 files a fetch collects`);
     // A point's outputs must come from its own run: nothing pre-made in points/, and no declared output among the
     // files copied into every point (a failed point would seem to have produced it).
@@ -156,8 +174,9 @@ export function lintJob({ target, machine, files }: LintInput): LintOutcome {
       if (f.path === "campaign.csv" || f.path.startsWith("points/") || /^campaign-[^/]*\.csv$/i.test(f.path)) errors.push(`${f.path}: the campaign writes this path; rename the file`);
       else if (manifest.outputs.includes(f.path)) errors.push(`${f.path} is a declared output; a copy in every point would pass for that point's result`);
     }
-    if (estimate_s > walltime_s) {
-      warnings.push(`the budget (walltime ${r.walltime}) covers about ${Math.floor(walltime_s / point_walltime_s) * parallel} of ${points} points at their limit; the campaign starts no point it could not finish`);
+    if (estimate_s > walltime_s && point_walltime_s > 0) {
+      const then = machine.scheduler === "slurm" ? "Slurm starts no point that could not finish by the deadline" : "the campaign starts no point it could not finish";
+      warnings.push(`the budget (walltime ${r.walltime}) covers about ${Math.floor(walltime_s / point_walltime_s) * parallel} of ${points} points at their limit; ${then}`);
     }
   }
 
@@ -169,7 +188,7 @@ export function lintJob({ target, machine, files }: LintInput): LintOutcome {
     cores: r.cores,
     gpus,
     walltime_s,
-    node_hours: Math.round(nodes * (walltime_s / 3600) * 1000) / 1000,
+    node_hours,
     ...(partition ? { partition } : {}),
     ...(machine.scheduler === "slurm" && machine.account ? { account: machine.account } : {}),
   };

@@ -1,7 +1,7 @@
 // The approval card (DR-0006 step 3): everything a human needs to approve or deny a job, as text. The CLI prints it;
 // the app (M8) renders the same facts.
 import type { JobRecord } from "@cairn/shared";
-import type { JobFileContent } from "./lint.js";
+import { hms, type JobFileContent } from "./lint.js";
 
 const MAX_LINES = 400;
 const isText = (b: Buffer) => !b.includes(0);
@@ -17,7 +17,6 @@ export function printable(text: string, multiline = false): string {
 }
 const fmtBytes = (n: number) => (n < 1024 ? `${n} B` : n < 1 << 20 ? `${(n / 1024).toFixed(1)} KiB` : `${(n / (1 << 20)).toFixed(1)} MiB`);
 
-const hms = (s: number) => `${String(Math.floor(s / 3600)).padStart(2, "0")}:${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
 
 export function renderCard(
   job: JobRecord,
@@ -26,18 +25,24 @@ export function renderCard(
 ): string {
   const { lint, manifest } = job;
   const a = job.author;
+  /** A Slurm campaign: its array task's time limit. */
+  const array = lint.campaign?.task_walltime_s;
   const lines = [
     `job ${job.id} · project ${job.project} · ${job.experiment} → ${job.target}`,
     `state:       ${job.state}${job.error ? `  (last error: ${job.error})` : ""}`,
     `author:      ${a.kind === "agent" ? `agent ${a.agent} (${a.role}; ${a.model}, ${a.effort}), run ${a.run}` : "you"}${job.branch ? `, branch ${job.branch}` : ""}`,
     ...(manifest.description ? [`what:        ${manifest.description}`] : []),
-    `resources:   ${lint.nodes} node${lint.nodes === 1 ? "" : "s"} × ${lint.cores} core${lint.cores === 1 ? "" : "s"}${lint.gpus ? `, ${lint.gpus} GPU${lint.gpus === 1 ? "" : "s"}/node` : ""}${manifest.resources.memory_gb ? `, ${manifest.resources.memory_gb} GB/node` : ""}, walltime ${manifest.resources.walltime} (${lint.node_hours} node-hours)`,
+    `resources:   ${array ? "per point: " : ""}${lint.nodes} node${lint.nodes === 1 ? "" : "s"} × ${lint.cores} core${lint.cores === 1 ? "" : "s"}${lint.gpus ? `, ${lint.gpus} GPU${lint.gpus === 1 ? "" : "s"}/node` : ""}${manifest.resources.memory_gb ? `, ${manifest.resources.memory_gb} GB/node` : ""}, ${
+      array ? `deadline ${manifest.resources.walltime} after submission (at most ${lint.node_hours} node-hours if every task runs to its limit)` : `walltime ${manifest.resources.walltime} (${lint.node_hours} node-hours)`
+    }`,
     ...(lint.account || lint.partition ? [`scheduler:   ${[lint.account ? `account ${lint.account}` : "", lint.partition ? `partition ${lint.partition}` : ""].filter(Boolean).join(", ")}`] : []),
     `pre-flight:  ${job.preflight ? `${job.preflight.ok ? "ok" : "REFUSED"}: ${job.preflight.detail}` : opts.scheduler === "none" ? "none (no scheduler on this machine)" : "not run (no SSH session at submit time)"}`,
     ...(manifest.campaign && lint.campaign
       ? [
-          `campaign:    ${lint.campaign.points} points (${Object.entries(manifest.campaign.parameters).map(([k, v]) => `${k} × ${v.length}`).join(", ")}), ${lint.campaign.parallel} at a time, ${lint.campaign.retries} retr${lint.campaign.retries === 1 ? "y" : "ies"} per point`,
-          `             each point ≤ ${manifest.campaign.point_walltime}; budget ${manifest.resources.walltime} (the grid needs about ${hms(lint.campaign.estimate_s)})`,
+          `campaign:    ${lint.campaign.points} points (${Object.entries(manifest.campaign.parameters).map(([k, v]) => `${k} × ${v.length}`).join(", ")}), ${array ? "a Slurm job array: " : ""}${lint.campaign.parallel} at a time, ${lint.campaign.retries} retr${lint.campaign.retries === 1 ? "y" : "ies"} per point`,
+          array
+            ? `             each point ≤ ${manifest.campaign.point_walltime} (task limit ${hms(array)}); without queue waits the grid needs about ${hms(lint.campaign.estimate_s)}`
+            : `             each point ≤ ${manifest.campaign.point_walltime}; budget ${manifest.resources.walltime} (the grid needs about ${hms(lint.campaign.estimate_s)})`,
           ...Object.entries(manifest.campaign.parameters).map(([k, v]) => `             ${k}: ${v.join(", ")}`),
           "             runs unattended once approved; no model in the loop (DR-0011)",
         ]

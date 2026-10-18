@@ -14,7 +14,7 @@ Status legend: Accepted = decided; Open = needs a decision (see open-questions.m
 | 0008 | Multi-model panel | Accepted |
 | 0009 | Context and memory management | Accepted |
 | 0010 | Authentication and cost governance | Accepted (amended 2026-10-14) |
-| 0011 | Campaigns (parameter sweeps) | Accepted (amendment proposed 2026-10-16) |
+| 0011 | Campaigns (parameter sweeps) | Accepted (amendments proposed 2026-10-16, 2026-10-18) |
 | 0012 | Skills, model evolution, and evaluation | Accepted (amended 2026-10-14) |
 | 0013 | Multi-provider model layer (Claude, GPT, Gemini, MAI) | Accepted (amended 2026-10-14) |
 | 0014 | Research sessions: a chat-centred app | Accepted (2026-10-14) |
