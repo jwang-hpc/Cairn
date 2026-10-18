@@ -15,6 +15,35 @@ export const JOB_ID_PATTERN = "^[0-9]{8}-[0-9]{4}-[0-9a-f]{4}$";
 const strict = { additionalProperties: false } as const;
 const JobPath = Type.String({ pattern: JOB_FILE_PATTERN, maxLength: 200 });
 
+/** A campaign parameter value: a number, or a short plain word (it becomes an environment variable and a CSV cell). */
+export const CampaignValue = Type.Union([Type.Number(), Type.String({ pattern: "^[A-Za-z0-9_.:+-]{1,64}$" })]);
+/** Parameter names become P_<name> environment variables. */
+export const CAMPAIGN_PARAM_PATTERN = "^[A-Za-z][A-Za-z0-9_]{0,30}$";
+export const CAMPAIGN_MAX_POINTS = 1000;
+
+/**
+ * A campaign (DR-0011): the job's script runs once per point of a parameter grid, each point in its own directory
+ * points/<NNNN>/ with its values as P_<name> environment variables. resources.walltime is the whole campaign's
+ * budget: no point starts once it could not finish within it.
+ */
+export const CampaignSpec = Type.Object(
+  {
+    /** Every combination is one point, the first parameter varying slowest. */
+    parameters: Type.Record(Type.String({ pattern: CAMPAIGN_PARAM_PATTERN }), Type.Array(CampaignValue, { minItems: 1, maxItems: CAMPAIGN_MAX_POINTS }), {
+      ...strict,
+      minProperties: 1,
+    }),
+    /** Wall-clock limit for one attempt at one point. */
+    point_walltime: Type.String({ pattern: WALLTIME_PATTERN }),
+    /** Points running at once (default 1); at most the job's cores. */
+    parallel: Type.Optional(Type.Integer({ minimum: 1, maximum: 64 })),
+    /** Re-runs of a failed point (default 0). */
+    retries: Type.Optional(Type.Integer({ minimum: 0, maximum: 3 })),
+  },
+  strict,
+);
+export type CampaignSpec = Type.Static<typeof CampaignSpec>;
+
 /** experiments/EXP-NNN/job.json */
 export const JobManifest = Type.Object(
   {
@@ -42,6 +71,8 @@ export const JobManifest = Type.Object(
     ),
     /** Small result files (relative to the job directory) that jobs.fetch_results copies into evidence/raw/. */
     outputs: Type.Array(JobPath, { maxItems: 50 }),
+    /** Run the script once per point of a parameter grid (DR-0011). Outputs are then per point. */
+    campaign: Type.Optional(CampaignSpec),
   },
   strict,
 );
@@ -74,6 +105,8 @@ export interface JobLint {
   node_hours: number;
   partition?: string;
   account?: string;
+  /** For a campaign: its size and the time the grid needs at that parallelism (no retries). */
+  campaign?: { points: number; parallel: number; retries: number; point_walltime_s: number; estimate_s: number };
 }
 
 export interface JobRecord {

@@ -160,6 +160,20 @@ describe("writeArtifacts areas", () => {
     for (const path of ["evidence/raw/EXP-001/j/../../../engine/jobs/x.json", "evidence/raw/./x", "logic/claims.md", "/etc/x", "drafts/x.md"]) {
       await expect(l.writeArtifacts([{ path, content: "x" }], P.user, "bad"), path).rejects.toThrow(LedgerError);
     }
+    await expect(l.writeArtifacts([{ path: "experiments/EXP-001/run.sh", content: "x" }], P.user, "bad")).rejects.toThrow(LedgerError);
+  });
+
+  it("writeExperiment records exactly the proposed files under experiments/EXP-NNN/, once", async () => {
+    const l = await create();
+    const files = [{ path: "run.sh", content: "echo 1\n" }, { path: "data/in.txt", content: "x\n" }];
+    expect(await l.writeExperiment("EXP-001", files, P.user, "experiment EXP-001")).toBe(true);
+    expect(await l.writeExperiment("EXP-001", files, P.user, "again")).toBe(false); // unchanged: no commit
+    expect(await l.writeExperiment("EXP-001", [files[0]!], P.user, "dropped data/")).toBe(true); // a file the experiment no longer has leaves the ledger too
+    expect((await git(l.dir, ["ls-files", "experiments/"])).trim()).toBe("experiments/EXP-001/run.sh");
+    expect((await l.check()).problems).toEqual([]);
+    for (const [exp, path] of [["../x", "run.sh"], ["EXP-001", "../../logic/claims.md"], ["EXP-002", "/etc/x"]] as const) {
+      await expect(l.writeExperiment(exp, [{ path, content: "x" }], P.user, "bad"), `${exp} ${path}`).rejects.toThrow(LedgerError);
+    }
   });
 });
 

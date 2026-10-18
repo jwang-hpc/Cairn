@@ -7,6 +7,8 @@ import { AGENT_AUTHOR, git } from "@cairn/launcher";
 import {
   type ClaimDraft,
   type DataClass,
+  EXPERIMENT_PATTERN,
+  JOB_FILE_PATTERN,
   type ExplorationNode,
   type Hypothesis,
   type HypothesisInput,
@@ -305,13 +307,40 @@ export class Ledger {
    * per call; paths outside the artifact areas are refused.
    */
   async writeArtifacts(files: { path: string; content: string | Uint8Array }[], prov: Provenance, summary: string, op = "write-artifact", remove: string[] = []): Promise<void> {
+    return this.#writeIn(ARTIFACT_AREAS, files, prov, summary, op, remove);
+  }
+
+  /**
+   * An experiment the user proposed as a job (`re job propose`): exactly the files that were proposed, under
+   * experiments/EXP-NNN/, so the project's working tree matches its ledger. Agents' experiments arrive on their
+   * worktree branches instead.
+   */
+  async writeExperiment(experiment: string, files: { path: string; content: string | Uint8Array }[], prov: Provenance, summary: string): Promise<boolean> {
+    if (!new RegExp(EXPERIMENT_PATTERN).test(experiment)) throw new LedgerError(`bad experiment id ${JSON.stringify(experiment)}`);
+    const area = `experiments/${experiment}/`;
+    const name = new RegExp(JOB_FILE_PATTERN);
+    for (const f of files) if (!name.test(f.path)) throw new LedgerError(`bad experiment file ${JSON.stringify(f.path)}`);
+    const targets = files.map((f) => ({ path: `${area}${f.path}`, content: f.content }));
+    const keep = new Set(targets.map((t) => t.path));
+    const remove = (await git(this.dir, ["ls-files", "--", area])).split("\n").filter((p) => p && !keep.has(p));
+    for (const t of targets) {
+      await mkdir(dirname(join(this.dir, t.path)), { recursive: true });
+      await writeFile(join(this.dir, t.path), t.content);
+    }
+    // Proposed again unchanged: the ledger already has it.
+    if (remove.length === 0 && !(await git(this.dir, ["status", "--porcelain", "--untracked-files=all", "--", area])).trim()) return false;
+    await this.#writeIn([area], targets, prov, summary, "propose-job", remove);
+    return true;
+  }
+
+  async #writeIn(areas: readonly string[], files: { path: string; content: string | Uint8Array }[], prov: Provenance, summary: string, op: string, remove: string[] = []): Promise<void> {
     this.#requireProvenance(prov);
     if (files.length === 0 && remove.length === 0) throw new LedgerError("nothing to write");
     const area = (raw: string) => {
       const p = posix.normalize(raw);
       // Check the raw path too: normalize() would turn evidence/raw/a/../../engine/x into an allowed-looking path.
-      if (raw.split("/").some((seg) => seg === ".." || seg === ".") || raw.startsWith("/") || p.split("/").includes("..") || !ARTIFACT_AREAS.some((a) => p.startsWith(a))) {
-        throw new LedgerError(`artifacts may only be written under ${ARTIFACT_AREAS.join(", ")}: ${raw}`);
+      if (raw.split("/").some((seg) => seg === ".." || seg === ".") || raw.startsWith("/") || p.split("/").includes("..") || !areas.some((a) => p.startsWith(a))) {
+        throw new LedgerError(`artifacts may only be written under ${areas.join(", ")}: ${raw}`);
       }
       return p;
     };

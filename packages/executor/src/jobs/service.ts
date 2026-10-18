@@ -365,6 +365,36 @@ export class JobService {
     return this.store.get(id);
   }
 
+  /**
+   * Reconcile on wake (DR-0011, M9): ask the machine about every launched job that has not finished, and fetch the
+   * results of finished campaigns that have none yet. A machine that can't be reached (no SSH session open) is
+   * reported, not an error: reconcile again once the session is open.
+   */
+  async reconcile(filter: { project?: string } = {}): Promise<{ checked: JobRecord[]; fetched: JobRecord[]; unreachable: { job: string; reason: string }[] }> {
+    const out = { checked: [] as JobRecord[], fetched: [] as JobRecord[], unreachable: [] as { job: string; reason: string }[] };
+    for (const j of await this.list(filter)) {
+      if (!j.remote) continue;
+      let r = j;
+      if (!TERMINAL_JOB_STATES.includes(j.state)) {
+        try {
+          r = await this.refresh(j.id);
+          out.checked.push(r);
+        } catch (e) {
+          out.unreachable.push({ job: j.id, reason: (e as Error).message });
+          continue;
+        }
+      }
+      if (r.manifest.campaign && ["completed", "failed", "cancelled"].includes(r.state) && !r.results) {
+        try {
+          out.fetched.push(await this.fetch(r.id));
+        } catch (e) {
+          out.unreachable.push({ job: r.id, reason: (e as Error).message });
+        }
+      }
+    }
+    return out;
+  }
+
   async list(filter: { project?: string } = {}): Promise<JobRecord[]> {
     return (await this.store.list()).filter((j) => !filter.project || j.project === filter.project);
   }

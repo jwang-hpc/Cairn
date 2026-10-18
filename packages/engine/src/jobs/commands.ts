@@ -1,7 +1,7 @@
 // `re job list | show | approve | deny | submit | status | cancel | fetch` and `re machine list`: the human side of
 // the executor (DR-0006). Agents propose jobs; only these commands (and later the app) approve them.
-import { JobError, type JobService, type JobServiceOptions, printable, SshTransport } from "@cairn/executor";
-import type { JobRecord } from "@cairn/shared";
+import { type JobFileContent, JobError, type JobService, type JobServiceOptions, printable, SshTransport, snapshotExperiment } from "@cairn/executor";
+import { type JobRecord, provenance } from "@cairn/shared";
 import { join } from "node:path";
 import type { Engine } from "../engine.js";
 import { openCurrentProject } from "../ledger/commands.js";
@@ -12,10 +12,15 @@ export const JOB_COMMANDS = ["job", "machine"] as const;
 export const JOB_OPTIONS = {
   reason: { type: "string" },
   all: { type: "boolean" },
+  target: { type: "string" },
 } as const;
 
 export const JOB_USAGE = `job commands (agents propose jobs; you approve them):
   job list [--all]                   jobs in the current project (--all: every project)
+  job propose <EXP-NNN> --target T   propose a job you wrote (experiments/EXP-NNN/ in the project); it waits
+                                     for your approval like any other (a campaign: see DR-0011)
+  job reconcile [--all]              after the laptop slept: ask the machines about unfinished jobs and fetch
+                                     finished campaigns' results
   job show <id>                      the approval card: resources, lint, every file in full
   job approve <id> [--note N]        approve and start it over your SSH session
   job deny <id> --reason R           deny; the reason goes back to the agent
@@ -143,6 +148,30 @@ export async function runJobCommand(
       case "show":
         io.out(await jobs.card(needId()));
         return 0;
+      case "propose": {
+        const experiment = id;
+        if (!experiment || typeof v.target !== "string") throw new JobError("usage: re job propose <EXP-NNN> --target <machine>");
+        const ledger = await openCurrentProject(engine, v, env);
+        // The files are read once: what is linted and approved is what the ledger records as your experiment.
+        let files: JobFileContent[] = [];
+        const read = async (exp: string) => (files = await snapshotExperiment(ledger.dir, exp));
+        const { job, auto } = await jobs.submit({ project: ledger.name, worktree: ledger.dir, experiment, target: v.target, author: { kind: "user" }, read });
+        io.out(`proposed ${job.id}: ${job.experiment} → ${job.target}${job.lint.campaign ? ` (campaign: ${job.lint.campaign.points} points)` : ""}, ${job.state}`);
+        if (await ledger.writeExperiment(experiment, files, provenance.user, `experiment ${experiment}: proposed as job ${job.id} on ${job.target}`)) {
+          io.out(`committed experiments/${experiment}/ to the ledger (your work)`);
+        }
+        io.out(auto.ok ? `auto-approved: ${auto.reason}` : `review: re job show ${job.id}   then: re job approve ${job.id}`);
+        return 0;
+      }
+      case "reconcile": {
+        const project = await jobListProject(engine, v, env);
+        const r = await jobs.reconcile(project ? { project } : {});
+        for (const j of r.checked) io.out(`checked  ${j.id}  ${j.state.padEnd(10)} ${j.experiment} → ${j.target}${j.history.at(-1)?.note ? `  (${j.history.at(-1)!.note})` : ""}`);
+        for (const j of r.fetched) io.out(`fetched  ${j.id}  ${j.results?.files.length ?? 0} files into ${j.results?.dir}`);
+        for (const u of r.unreachable) io.out(`waiting  ${u.job}  ${u.reason}`);
+        if (r.checked.length + r.fetched.length + r.unreachable.length === 0) io.out("(nothing to reconcile)");
+        return r.unreachable.length ? 3 : 0;
+      }
       case "approve": {
         const j = await jobs.approve(needId(), v.note as string | undefined);
         io.out(`approved ${j.id}`);
