@@ -26,6 +26,9 @@ import { renderTree } from "../ledger/tree.js";
 import { listPanels } from "../panel/commands.js";
 import { judgePanel, PanelError, panelView, readPanel, renderPanel } from "../panel/panel.js";
 import { join } from "node:path";
+import { FileError, listFiles, readFile as readProjectFile } from "../ledger/files.js";
+import { paperNotes, parseBibtex } from "../literature/check.js";
+import { litFiles } from "../literature/commands.js";
 import type { LiteratureService } from "@cairn/executor";
 import { openLiteratureService } from "../literature/literature.js";
 import { REPO_ROOT } from "../paths.js";
@@ -272,6 +275,22 @@ export function createApi(engine: Engine, opts: ApiOptions = {}): Api {
       const l = await openCurrentProject(engine, { project: c.params[0]! }, env);
       return { project: l.name, drafts: await listDrafts(l) };
     }],
+    // project files and literature, for the app's Results, Files, Literature, and preview drawer (DR-0014)
+    ["GET", "/api/projects/:name/files", async (c) => {
+      const l = await openCurrentProject(engine, { project: c.params[0]! }, env);
+      return { project: l.name, ...(await listFiles(l, c.query.get("dir") ?? "")) };
+    }],
+    ["GET", "/api/projects/:name/file", async (c) => {
+      const l = await openCurrentProject(engine, { project: c.params[0]! }, env);
+      const path = c.query.get("path");
+      if (!path) throw new ApiError(400, "give ?path=<file in the project>");
+      return { project: l.name, file: await readProjectFile(l, path) };
+    }],
+    ["GET", "/api/projects/:name/literature", async (c) => {
+      const l = await openCurrentProject(engine, { project: c.params[0]! }, env);
+      const lit = await litFiles(l, "HEAD");
+      return { project: l.name, notes: paperNotes(lit.notes), references: parseBibtex(lit.refs).entries.length };
+    }],
     // research sessions (re chat; DR-0014)
     ["GET", "/api/projects/:name/sessions", async (c) => {
       const l = await openCurrentProject(engine, { project: c.params[0]! }, env);
@@ -413,6 +432,7 @@ export function createApi(engine: Engine, opts: ApiOptions = {}): Api {
     if (e instanceof JobError || e instanceof LedgerError || e instanceof PanelError) {
       return json(NOT_FOUND.test(e.message) ? 404 : CONFLICT.test(e.message) ? 409 : 400, { error: e.message });
     }
+    if (e instanceof FileError) return json(/^no file/.test(e.message) ? 404 : /preview limit/.test(e.message) ? 413 : 400, { error: e.message });
     if (e instanceof DelegationError) return json(/^no proposal/.test(e.message) ? 404 : 409, { error: e.message });
     // The reviewer model could not be asked or failed (provider refused the data class, route down): upstream.
     if (e instanceof ReviewerError) return json(502, { error: e.message });

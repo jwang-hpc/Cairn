@@ -40,6 +40,8 @@ describe("classifyFailure", () => {
     ["Connection error.", "server"],
     ["429 usage limit reached", "limit"],
     ["subscription_sharing_usage_limit_exceeded", "limit"],
+    ['400 {"type":"error","error":{"type":"invalid_request_error","message":"Third-party apps now draw from your extra usage, not your plan limits. Add more at claude.ai/admin-settings/usage and keep going."}}', "limit"],
+    ["Your credit balance is too low to access the Anthropic API.", "limit"],
     ["401 invalid api key", "auth"],
     ["OAuth token refresh failed: invalid_grant", "auth"],
     ["400 invalid request: unknown parameter 'foo'", "other"],

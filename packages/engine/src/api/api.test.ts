@@ -261,6 +261,32 @@ describe("projects and ledger reads (re project / hypothesis / tree / decision /
   });
 });
 
+describe("project files and literature (the app's Results, Files, and preview drawer)", () => {
+  it("lists committed files with sizes; reads text, images as base64, binaries as size only; refuses traversal", async () => {
+    await demo.writeArtifacts(
+      [
+        { path: "evidence/tables/EXP-001/t.csv", content: "n,primes\n100000,9592\n" },
+        { path: "evidence/raw/EXP-001/fig.png", content: new Uint8Array([0x89, 0x50, 0x4e, 0x47]) },
+        { path: "evidence/raw/EXP-001/blob.bin", content: new Uint8Array([1, 0, 2]) },
+      ],
+      P.aiExecuted("m1", "high"),
+      "files",
+    );
+    await writeFile(join(demo.dir, "evidence", "uncommitted.csv"), "x\n");
+    const list = (await get("/api/projects/demo/files?dir=evidence")).body;
+    expect(list.files).toEqual(expect.arrayContaining([{ path: "evidence/tables/EXP-001/t.csv", bytes: 21 }, { path: "evidence/raw/EXP-001/fig.png", bytes: 4 }]));
+    expect(JSON.stringify(list)).not.toContain("uncommitted");
+    expect((await get(`/api/projects/demo/file?path=${encodeURIComponent("evidence/tables/EXP-001/t.csv")}`)).body.file).toEqual({ path: "evidence/tables/EXP-001/t.csv", bytes: 21, kind: "text", text: "n,primes\n100000,9592\n" });
+    expect((await get(`/api/projects/demo/file?path=${encodeURIComponent("evidence/raw/EXP-001/fig.png")}`)).body.file).toEqual({ path: "evidence/raw/EXP-001/fig.png", bytes: 4, kind: "image", mime: "image/png", base64: "iVBORw==" });
+    expect((await get(`/api/projects/demo/file?path=${encodeURIComponent("evidence/raw/EXP-001/blob.bin")}`)).body.file).toEqual({ path: "evidence/raw/EXP-001/blob.bin", bytes: 3, kind: "binary" });
+    expect((await get(`/api/projects/demo/file?path=${encodeURIComponent("evidence/uncommitted.csv")}`)).status).toBe(404);
+    expect((await get(`/api/projects/demo/file?path=${encodeURIComponent("evidence")}`)).status).toBe(404);
+    expect((await get(`/api/projects/demo/file?path=${encodeURIComponent("../../etc/passwd")}`)).status).toBe(400);
+    expect((await get("/api/projects/demo/file")).status).toBe(400);
+    expect((await get("/api/projects/demo/literature")).body).toEqual({ project: "demo", notes: [], references: 0 });
+  });
+});
+
 describe("jobs (re job / re machine): agents propose, the user approves", () => {
   it("list → card → deny needs a reason → approve → refresh → fetch", async () => {
     const job = await propose();

@@ -44,7 +44,11 @@ export function classifyFailure(message: string | undefined): FailureClass {
   if (/\b(401|403)\b|unauthori[sz]ed|forbidden|invalid[_ ]?(api[_ ]?key|token|grant)|oauth|authentication|not logged in|permission/.test(m)) {
     return "auth";
   }
-  if (/\b429\b|rate.?limit|usage.?limit|quota|too many requests|limit_exceeded|overloaded_error/.test(m)) return "limit";
+  // Billing refusals are limits too: the next route (e.g. an API key) may still have room. Anthropic, 2026-10:
+  // "Third-party apps now draw from your extra usage, not your plan limits. Add more at ...".
+  if (/\b429\b|rate.?limit|usage.?limit|quota|too many requests|limit_exceeded|overloaded_error|extra usage|plan limits?|credit balance|insufficient.?(credit|funds|balance)|billing|payment required|\b402\b/.test(m)) {
+    return "limit";
+  }
   if (/\b5\d\d\b|connection|timed? ?out|econn|enotfound|socket|network|overloaded|unavailable|bad gateway/.test(m)) return "server";
   return "other";
 }
