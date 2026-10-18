@@ -1,7 +1,7 @@
 // `re job list | show | approve | deny | submit | status | cancel | fetch` and `re machine list`: the human side of
 // the executor (DR-0006). Agents propose jobs; only these commands (and later the app) approve them.
-import { JobError, type JobService, type JobServiceOptions, printable, SshTransport } from "@cairn/executor";
-import type { JobRecord } from "@cairn/shared";
+import { type JobFileContent, JobError, type JobService, type JobServiceOptions, printable, SshTransport, snapshotExperiment } from "@cairn/executor";
+import { type JobRecord, provenance } from "@cairn/shared";
 import { join } from "node:path";
 import type { Engine } from "../engine.js";
 import { openCurrentProject } from "../ledger/commands.js";
@@ -152,8 +152,14 @@ export async function runJobCommand(
         const experiment = id;
         if (!experiment || typeof v.target !== "string") throw new JobError("usage: re job propose <EXP-NNN> --target <machine>");
         const ledger = await openCurrentProject(engine, v, env);
-        const { job, auto } = await jobs.submit({ project: ledger.name, worktree: ledger.dir, experiment, target: v.target, author: { kind: "user" } });
+        // The files are read once: what is linted and approved is what the ledger records as your experiment.
+        let files: JobFileContent[] = [];
+        const read = async (exp: string) => (files = await snapshotExperiment(ledger.dir, exp));
+        const { job, auto } = await jobs.submit({ project: ledger.name, worktree: ledger.dir, experiment, target: v.target, author: { kind: "user" }, read });
         io.out(`proposed ${job.id}: ${job.experiment} → ${job.target}${job.lint.campaign ? ` (campaign: ${job.lint.campaign.points} points)` : ""}, ${job.state}`);
+        if (await ledger.writeExperiment(experiment, files, provenance.user, `experiment ${experiment}: proposed as job ${job.id} on ${job.target}`)) {
+          io.out(`committed experiments/${experiment}/ to the ledger (your work)`);
+        }
         io.out(auto.ok ? `auto-approved: ${auto.reason}` : `review: re job show ${job.id}   then: re job approve ${job.id}`);
         return 0;
       }

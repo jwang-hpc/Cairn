@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { JobRecord, MachineConfig } from "@cairn/shared";
@@ -150,4 +150,31 @@ describe("a campaign on the workstation runner (bash, process groups, no model)"
     expect(ev("points/0001/results.csv")).toBeUndefined();
     expect((await svc.reconcile({ project: "demo" })).fetched).toEqual([]); // fetched once
   }, 60_000);
+
+  it("a point cannot pull an outside file into the summary through a link", async () => {
+    const secret = join(scratch, "secret.txt");
+    await writeFile(secret, "n,sq\nSECRET,1\n");
+    const d = join(worktree, "experiments", "EXP-002");
+    await mkdir(d, { recursive: true });
+    // Lint refuses a literal link to an outside path; a target read from a data file gets past it, so the driver checks too.
+    await writeFile(join(d, "target.txt"), `${secret}\n`);
+    await writeFile(join(d, "run.sh"), 'if [ "$P_n" = 1 ]; then printf "n,sq\\n1,1\\n" > results.csv; else ln -s "$(cat target.txt)" results.csv; ln -s "$(cat target.txt)" .result; fi\n');
+    await writeFile(join(d, "job.json"), JSON.stringify({ ...base, campaign: { parameters: { n: [1, 2] }, point_walltime: "00:00:10", parallel: 2 } }));
+    const svc = service();
+    const { job } = await svc.submit({ project: "demo", worktree, experiment: "EXP-002", target: "workstation", author: { kind: "user" } });
+    expect(job.lint.errors).toEqual([]);
+    await svc.approve(job.id);
+    let r = await svc.refresh(job.id);
+    for (let i = 0; i < 100 && !["completed", "failed"].includes(r.state); i++) {
+      await new Promise((res) => setTimeout(res, 200));
+      r = await svc.refresh(job.id);
+    }
+    const fetched = await svc.fetch(job.id);
+    expect(fetched.results?.refused).toEqual([{ path: "points/0001/results.csv", reason: "symlink" }]);
+    const ev = (p: string) => evidence.get(`evidence/raw/EXP-002/${job.id}/${p}`)?.toString("utf8");
+    expect(ev("campaign-results.csv")).toBe("point,n,n,sq\n0,1,1,1\n");
+    expect(ev("campaign.csv")).toMatch(/^point,n,status,exit,attempts,seconds\n0,1,ok,0,1,\d+\n1,2,ok,0,1,\d+\n$/);
+    expect([...evidence.values()].some((c) => c.includes("SECRET"))).toBe(false);
+    expect(await readFile(secret, "utf8")).toBe("n,sq\nSECRET,1\n"); // and nothing was written through the links
+  }, 30_000);
 });

@@ -20,7 +20,8 @@ These implementation choices differ from the text above. Merging the M9.1 PR acc
   lint, approval card, launch, fetch into `evidence/raw/`.
   - One approval covers the whole grid.
   - A campaign never auto-approves, whoever proposed it.
-  - Either an agent (`jobs.submit`) or the user (`re job propose`) can write one.
+  - Either an agent (`jobs.submit`) or the user (`re job propose`) can write one. `re job propose` commits exactly
+    the proposed files to `experiments/EXP-NNN/` as the user's work. Agents' experiments arrive on their branches.
   - The approved files are fingerprinted, and the driver is generated from them at launch, so the spec cannot
     change mid-run.
 - **Grid:** `parameters` maps each name to its values. Every combination is a point, the first parameter varying
@@ -45,6 +46,9 @@ These implementation choices differ from the text above. Merging the M9.1 PR acc
   workstation. Slurm job arrays come next.
 - **Evidence integrity:** an experiment file may not sit where the campaign writes (`points/…`, `campaign.csv`,
   `campaign-*.csv`) and may not be a declared output. Every point's outputs therefore come from its own run.
+  The driver reads results only from regular, single-link files inside the job directory (as fetch does). It
+  removes a file before writing it, so a link a point leaves behind cannot make the driver read or write outside
+  the job.
 - **Reconcile on wake:** `re job reconcile` (and `POST /api/jobs/reconcile`) asks the machines about every
   unfinished job and fetches finished campaigns into the evidence.
   - If the SSH session did not survive the sleep, the jobs are reported as waiting (exit 3).

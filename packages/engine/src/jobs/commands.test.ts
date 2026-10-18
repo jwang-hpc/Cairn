@@ -103,7 +103,13 @@ describe("re job / re machine (DR-0006: agents propose, you approve)", () => {
     expect(id).toBeDefined();
     expect(p.out).toContain(`review: re job show ${id}   then: re job approve ${id}`); // a campaign never auto-approves
     expect((await re("job", "show", id!)).out).toContain("runs unattended once approved; no model in the loop (DR-0011)");
-    expect((await re("job", "list")).out).toMatch(new RegExp(`^${id}  pending_approval\\s+EXP-002 → workstation\\s+you`));
+    expect(p.out).toContain("committed experiments/EXP-002/ to the ledger (your work)");
+    const demo = await Ledger.open(join(root, "projects/demo"));
+    expect((await demo.check()).problems).toEqual([]); // the working tree matches the ledger
+    const again = await re("job", "propose", "EXP-002", "--target", "workstation");
+    expect(again.out).not.toContain("committed"); // unchanged: nothing new to record
+    expect((await re("job", "deny", /^proposed (\S+):/.exec(again.out)![1]!, "--reason", "duplicate")).code).toBe(0);
+    expect((await re("job", "list")).out).toMatch(new RegExp(`${id}  pending_approval\\s+EXP-002 → workstation\\s+you`));
     expect((await re("job", "approve", id!)).code).toBe(0);
 
     let r = await re("job", "reconcile");

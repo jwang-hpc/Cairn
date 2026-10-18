@@ -48,7 +48,7 @@ BEGIN {
   srand(seed); hit = 0
   for (i = 0; i < n; i++) { x = rand(); y = rand(); if (x * x + y * y <= 1) hit++ }
   pi = 4 * hit / n; err = pi - 3.14159265358979; if (err < 0) err = -err
-  printf "samples,seed,pi,abs_error\n%d,%d,%.6f,%.6f\n", n, seed, pi, err
+  printf "pi,abs_error\n%.6f,%.6f\n", pi, err
 }
 EOF
 cat > "$PROJ/experiments/EXP-001/job.json" <<'EOF'
@@ -93,7 +93,7 @@ read -r _ || true
 WOKE="$(date +%s)"
 echo "away for $((WOKE - SLEPT)) s"
 SINCE="$(date -r "$SLEPT" '+%Y-%m-%d %H:%M:%S')"
-LAST_SLEEP="$(pmset -g log 2>/dev/null | awk -v since="$SINCE" '($1 " " $2) >= since && /Entering Sleep/' | tail -n 1)"
+LAST_SLEEP="$(pmset -g log 2>/dev/null | LC_ALL=C awk -v since="$SINCE" '($1 " " $2) >= since && /Entering Sleep/' | tail -n 1)"
 if [ -n "$LAST_SLEEP" ]; then echo "macOS slept: $LAST_SLEEP"; else echo "note: pmset shows no sleep since $SINCE (the run still counts, but the laptop did not sleep)"; fi
 
 echo "== re job reconcile (on wake)"

@@ -176,8 +176,12 @@ Acceptance: a 20-point sweep runs on the workstation while the laptop sleeps; re
     `evidence/raw/` with every point's outputs.
   - **CLI and API:** `re job propose <EXP> --target T` (a job you wrote), `re job reconcile [--all]`, and
     `POST /api/jobs/reconcile`.
-  - **Acceptance pending** (the user, on the VPN): `sh scripts/acceptance-m9.sh` runs a 20-point Monte Carlo
-    sweep while the laptop sleeps, then reconciles on wake.
+  - **Acceptance run 1 (2026-10-18, the user):** 20 of 20 points ok on the workstation, unattended. Reconcile
+    fetched 22 files into the evidence.
+    - The laptop did not actually sleep (away 2 s), so the lost-session path was not exercised.
+    - `re ledger check` failed on the uncommitted `experiments/`. Fixed: `re job propose` now commits the
+      experiment.
+    - To re-run with a real sleep: `sh scripts/acceptance-m9.sh`.
   - **Next:** Slurm job arrays for campaigns on HPC; notifications when a campaign finishes (with the notify
     server); the app calls reconcile when it connects.
 
