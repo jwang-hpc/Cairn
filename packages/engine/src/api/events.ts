@@ -19,6 +19,8 @@ export interface EventStreamOptions {
   onError: (e: unknown) => void;
   /** Called once when the stream ends, however it ends. */
   onClose?: () => void;
+  /** In-process events pushed as they happen (research sessions: replies, proposals, worker steps); returns unsubscribe. */
+  subscribe?: (push: (event: string, data: unknown) => void) => () => void;
 }
 
 export interface EventStream {
@@ -55,9 +57,11 @@ export function eventStream(o: EventStreamOptions): EventStream {
     }
   };
   const onAbort = () => close();
+  let unsubscribe: (() => void) | undefined;
   function stop() {
     if (ended) return;
     ended = true;
+    unsubscribe?.();
     for (const t of timers) clearInterval(t);
     o.signal?.removeEventListener("abort", onAbort);
     o.onClose?.();
@@ -165,6 +169,7 @@ export function eventStream(o: EventStreamOptions): EventStream {
       every(o.eventsMs, () => void pollEvents());
       every(o.jobsMs, () => void pollJobs());
       every(o.heartbeatMs, () => send(": heartbeat\n\n"));
+      unsubscribe = o.subscribe?.((event, data) => send(sse(event, data)));
     },
     cancel() {
       stop();

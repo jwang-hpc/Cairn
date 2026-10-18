@@ -105,6 +105,6 @@ describe("loadConfig", () => {
     );
     const p = await problems();
     expect(p).toContain("engine.yaml: budget.daily.usd.per_provider.gemini: unknown provider (known: anthropic, openai, google, microsoft)");
-    expect(p).toContain("engine.yaml: budget.daily.per_role.reviewer: unknown role (known: literature, coder, analysis, panel, writer)");
+    expect(p).toContain("engine.yaml: budget.daily.per_role.reviewer: unknown role (known: literature, coder, analysis, panel, writer, orchestrator)");
   });
 });
